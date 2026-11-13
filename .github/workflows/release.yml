@@ -26,7 +26,13 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Install build tools
-        run: pacman -Syu --noconfirm --needed rust git
+        # makepkg runs as an unprivileged user and cannot install the
+        # package's dependencies itself, so they are installed here.
+        # vulkan-swrast is the software driver; it satisfies `vulkan-driver`.
+        run: >-
+          pacman -Syu --noconfirm --needed rust git
+          libxcb libxkbcommon libxkbcommon-x11 wayland fontconfig freetype2
+          vulkan-icd-loader vulkan-swrast
       - uses: actions/checkout@v4
       - name: Check versions agree
         id: version
@@ -51,6 +57,9 @@ jobs:
           sudo -u builder makepkg --noconfirm
           pacman -U --noconfirm ./*.pkg.tar.zst
           dc-cli help
+          # The GUI cannot open a window here; check it starts far enough to
+          # ask for the token.
+          dc-client 2>&1 | grep -q "DC_TOKEN is not set"
           sha256sum ./*.pkg.tar.zst > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
@@ -86,5 +95,5 @@ jobs:
           gh release create "$TAG" dist/* \
             --target "$GITHUB_SHA" \
             --prerelease \
-            --title "$TAG (M0 protocol spike)" \
+            --title "$TAG (early preview)" \
             --notes-file packaging/RELEASE_NOTES.md

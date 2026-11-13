@@ -138,6 +138,64 @@ Expected: `gateway send op=Identify` once, then `gateway send op=Heartbeat`
 roughly every 41 s (first one after a random fraction of that). Trace logs
 contain opcodes only — no payloads, no token.
 
+## 8. The window, with fake data (no account, no network)
+
+Needs a working Vulkan driver. On Arch, build dependencies are
+`libxkbcommon libxkbcommon-x11 wayland libxcb fontconfig vulkan-icd-loader`.
+
+```bash
+cargo run -p dc-ui --example demo
+```
+
+Expected: a dark window titled `dc-client`, about 1100x720.
+
+- Left column: a grey strip, then the name `Fake Owner`; below it
+  `Fake Friends Server`, `🔊 Voice`, a greyed-out
+  `# channel-type-from-the-future`, the small heading `TEXT CHANNELS`,
+  `# general`, then `(unavailable server)`, `Direct messages`, `@ Fake Friend`,
+  `@ Fake Friend, other_fake`.
+- Right side: the title `Select a channel`, the hint
+  `Pick a channel on the left.`, and at the bottom the status line
+  `Demo data (not connected)`.
+- Click `# general`: the title becomes `# general`, the row is highlighted,
+  and three messages appear, oldest at the top, ending with
+  `Fake Owner 03:06 newest message`.
+
+Then with sample cosmetics:
+
+```bash
+DC_COSMETICS_DEMO=1 cargo run -p dc-ui --example demo
+```
+
+Expected differences: the strip at the top-left is pink, your name reads
+`me but cooler` in yellow, and in `# general` the friend's messages are
+signed `bestie` in light blue.
+
+Things I could not check and would like you to look at: does text wrap
+instead of running off the window, does the message list scroll with the
+wheel and start at the bottom, does the channel list scroll, is anything
+overlapping or cut off, does it work on both Wayland and X11.
+
+## 9. The real app
+
+Set the token as in §2, optionally create a cosmetics file
+(`docs/COSMETICS.md`), then:
+
+```bash
+cargo run -p dc-app
+```
+
+(or `dc-client` if you installed the package).
+
+Expected: the status line goes `Fetching gateway URL…` →
+`Connecting to the gateway…` → `Connected as <you>`, and the left column
+fills with your servers and DMs. Click a text channel: its last 50 messages
+load, and new messages appear live at the bottom. Closing the window exits
+within a few seconds.
+
+If the status line shows an error instead, copy it. If the window never
+appears, run with `DC_LOG=debug` and copy stderr.
+
 ## If something fails — what to paste back
 
 Please send:

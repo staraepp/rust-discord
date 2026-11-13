@@ -1,6 +1,8 @@
 # PROGRESS
 
-Last updated: 2026-11-13 — end of **M0 (protocol spike, headless)**.
+Last updated: 2026-11-13 — M0 merged; **first GUI slice** (store, cosmetics
+overlay, GPUI window) added at the owner's request, ahead of the blueprint
+order (see "Deviations").
 
 ## Done (verified in the sandbox)
 
@@ -34,7 +36,7 @@ passes (also available as `cargo xtask ci` / `just ci`).
 - **`dc-cli`**: `guilds`, `watch <channel_id>`, `history <channel_id> [N]`;
   token from `DC_TOKEN` only (token-looking arguments are refused); terminal
   output sanitized against escape-sequence injection.
-- **Tests** (93): fixture parser tests, session state-machine tests, driver
+- **Tests** (93 at M0, 114 now): fixture parser tests, session state-machine tests, driver
   tests on mock transport + fake clock (no real sleeping), rate-limiter and
   API-client tests, redaction tests in every crate that touches the token.
   All fixtures are synthetic (`fixtures/README.md`).
@@ -46,6 +48,24 @@ passes (also available as `cargo xtask ci` / `just ci`).
   builds the Arch package in an `archlinux` container (installs it and runs
   `dc-cli help` as a smoke test) and publishes a GitHub pre-release on a
   `v*` tag.
+
+- **`dc-store`** (pure): normalized state reduced from gateway dispatches
+  and REST history (guilds, channels, DMs, per-channel messages sorted and
+  de-duplicated, capped at 500 per channel; a new READY replaces everything).
+- **`dc-core`** (pure): `LocalOverlay`, the client-side cosmetics layer
+  (display name, name color, accent color, banner, avatar, avatar
+  decoration; `me` block plus per-user entries; strict JSON config).
+  Documented in `docs/COSMETICS.md`.
+- **`dc-ui`**: tested view-models (`sidebar`, `messages`, `profile_card`) and
+  a GPUI window that draws them: profile card with local cosmetics, server
+  and channel tree, message list, status bar. `cargo run -p dc-ui --example
+  demo` opens it with synthetic data, no account needed.
+- **`dc-app`** (`dc-client` binary): GPUI on the main thread, tokio backend
+  thread for gateway + REST, channels in between; the UI never sees the
+  token. Opening a channel fetches its last 50 messages.
+- The demo window starts and keeps running on a virtual X display here
+  without panicking. That proves start-up and event handling only; nothing
+  was ever seen on screen (the software renderer produced no frames).
 
 ## UNVERIFIED (needs the owner, see `docs/LOCAL_VERIFY.md`)
 
@@ -59,6 +79,31 @@ Nothing below has ever talked to Discord.
 - U5. Heartbeat cadence keeps a real session alive for minutes. → §5, §7
 - U6. Resume / re-identify after a real network drop. → §6
 - U7. Real rate-limit headers from user-token requests match the parser.
+
+- U10. **Everything visual in `dc-ui`**: layout, colors, scrolling, text
+  wrapping, click targets, whether images (banner, avatar, decoration) load
+  and scale sensibly, behaviour on Wayland vs X11. → LOCAL_VERIFY §8
+- U11. `dc-client` against live Discord (same risks as U1–U6). → §9
+- U12. GPUI on Windows: compiled and unit-tested by CI only.
+
+## Deviations from the blueprint (owner-requested, 2026-11-13)
+
+- The GUI came before M1 was finished: there is a store and the overlay, but
+  **no event bus, no plugin traits, no built-in plugins** yet.
+- **No Slint vs GPUI bake-off**: the owner picked GPUI directly.
+- The GUI was built **before the protocol layer was verified live**, so a
+  wrong READY/Identify assumption (A1, A2) now also blocks the GUI.
+- `LocalOverlay` reads a JSON file; there is no settings UI.
+
+## Known gaps against what the owner asked for
+
+- Custom emoji / stickers (FakeNitro-lite): not started.
+- Shop decorations: any local image works as a decoration, but the shop
+  catalog is not fetched.
+- Profile popups for other users: not built, so their banner / decoration
+  overrides have nowhere to show yet (names and name colors do).
+- Sending messages, markdown, inline images, avatars from Discord's CDN,
+  unread markers, threads in the tree: not built.
 
 ## Assumptions (docs did not pin these down)
 
@@ -102,6 +147,12 @@ Each is marked `// ASSUMPTION:` in code unless noted.
 - A10. The 30 s Hello timeout and the 1 s → 60 s backoff curve are our own
   choices; the docs give no numbers.
 
+- A11. GPUI is used from crates.io at 0.2.2, the newest published release.
+  It needs `libc < 0.2.190` on Linux (one of its dependencies no longer
+  compiles otherwise), so `dc-ui` pins `libc = "=0.2.189"`. That holds the
+  whole workspace's libc back until a newer GPUI is released; the
+  alternative is depending on GPUI from Zed's git repository.
+
 ## Decisions for the owner to confirm
 
 - D1. (Owner left this to me: keeping it as is for now.)
@@ -129,12 +180,20 @@ Each is marked `// ASSUMPTION:` in code unless noted.
 - D6. Timestamps are kept as strings (no `chrono`/`time` yet).
 - D7. Workspace crates are licensed MIT to match the repo `LICENSE`.
 
-## Next (not started — waiting for the owner's go)
+- D8. `deny.toml` changes forced by GPUI's dependency tree: licenses `Zlib`,
+  `NCSA`, `CC0-1.0` and `MPL-2.0` are now allowed (none is GPL/AGPL/LGPL;
+  MPL-2.0 is file-level copyleft), and "unmaintained" advisories are only
+  enforced for direct dependencies. Vulnerability and unsoundness advisories
+  are still denied everywhere.
+- D9. GPUI is a heavy dependency: roughly 500 extra crates, a debug binary of
+  several hundred MB, and multi-minute clean builds.
 
-1. Owner runs `docs/LOCAL_VERIFY.md`; fix whatever U1–U7 turn up; add
-   reduced, sanitized fixtures for any payload that surprised the parser.
-2. Then M1: `dc-store`, `dc-core` (store, event bus, `LocalOverlay`, plugin
-   traits, built-ins).
-3. Carry-overs: gateway compression (D3), QoS heartbeat / opcode 41 (docs:
-   recommended, not required), keyring-backed token storage
-   (`dc-platform-*`, replaces `DC_TOKEN`).
+## Next (waiting for the owner)
+
+1. Owner runs `docs/LOCAL_VERIFY.md` §8 (demo window, no account) and §9
+   (real account); report what looks wrong and what fails.
+2. Fix what that turns up, then pick the next feature: sending messages,
+   profile popups (so cosmetics show for other users), or custom emoji.
+3. Carry-overs: rest of M1 (event bus, plugin traits), gateway compression
+   (D3), keyring-backed token storage (replaces `DC_TOKEN`), fetching the
+   shop decoration catalog.

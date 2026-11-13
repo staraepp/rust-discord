@@ -1,0 +1,27 @@
+[package]
+name = "dc-ui"
+description = "GPUI shell: a pure view over the store and the local cosmetics overlay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dc-core.workspace = true
+dc-protocol.workspace = true
+dc-store.workspace = true
+futures.workspace = true
+gpui.workspace = true
+
+# Not used by this crate's code. See the note next to `gpui` in the workspace
+# Cargo.toml: this keeps `cargo update` from picking a libc that breaks the
+# GPUI build on Linux.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
