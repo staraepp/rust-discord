@@ -27,13 +27,19 @@ pub enum BackendEvent {
     },
     /// A one-line connection status for the status bar.
     Status(String),
+    /// A CDN image the UI asked for, as raw bytes.
+    Image { url: String, bytes: Vec<u8> },
+    /// A CDN image that could not be downloaded; the UI keeps its fallback.
+    ImageFailed { url: String },
 }
 
 /// What the UI asks the backend to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiCommand {
     /// Fetch recent messages for a channel the user opened.
     LoadHistory(Snowflake),
+    /// Download a Discord CDN image (avatar, icon, banner, decoration).
+    FetchImage(String),
 }
 
-pub use view::run;
+pub use view::{UiOptions, run};

@@ -120,16 +120,23 @@ Done (uncommitted work committed as "WIP" with this file):
   channel / emoji markup made readable, local 12-hour times, full
   `ProfileView` (server data + local cosmetics).
 
+- `dc-ui::view` rewritten to the new layout (server rail, channel column
+  with user bar, message pane with grouped messages and reply previews,
+  DM profile side panel, profile popup on avatar/name click, CDN image
+  cache) and `dc-ui::lib` gained `UiCommand::FetchImage`,
+  `BackendEvent::Image`/`ImageFailed` and `UiOptions`. **This code was
+  written but never compiled** (the session ran out mid-build).
+
 **Not done yet — the build is broken until this is finished:**
 
-- `dc-ui::view` still uses the old model API. Rewrite it to the layout
-  above: rail + channel column (+ user bar) + message pane + right profile
-  panel (DMs) / profile popup on avatar or name click.
-- Image loading: `ImageRef::Remote` URLs must be fetched by the backend via
-  `ApiClient::get_cdn` (UI sends `UiCommand::FetchImage(url)`, backend
-  replies `BackendEvent::Image { url, bytes }`), cached in memory, and drawn
-  with `gpui::Image::from_bytes(ImageFormat::Png, bytes)`. Show initials
-  until loaded. `ImageRef::Local` is drawn straight from the path.
+- Compile `dc-ui` and fix whatever the new `view.rs` gets wrong.
+- `dc-app`: call `dc_ui::run(events, UiOptions { overlay, utc_offset_minutes }, ..)`
+  and handle `UiCommand::FetchImage(url)` in `backend.rs` with
+  `api.get_cdn(&url)`, replying `BackendEvent::Image { url, bytes }` or
+  `ImageFailed`. Local UTC offset: needs a small dep (e.g. `chrono` with
+  `clock`) or pass 0 for now — ask the owner before adding a dependency.
+- `examples/demo.rs`: switch to `UiOptions`, answer `FetchImage` with
+  `ImageFailed` (no network in the demo).
 - Update `examples/demo.rs`, docs (`COSMETICS.md` for `profile_color`,
   `bio`, catalog decorations), `PROGRESS.md`, `LOCAL_VERIFY.md` §8.
 
