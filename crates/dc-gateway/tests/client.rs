@@ -330,3 +330,61 @@ async fn dropping_the_event_receiver_closes_the_session_cleanly() {
     assert!(matches!(harness.task.await, Ok(Ok(()))));
     assert_eq!(server.next_sent(), Some(Sent::Close(1000)));
 }
+
+#[tokio::test]
+async fn member_commands_wait_for_ready_and_are_throttled_without_blocking_events() {
+    use dc_gateway::GatewayCommand;
+    use dc_protocol::Snowflake;
+    let connector = MockConnector::new();
+    let mut server = connector.expect_connection();
+    let clock = FakeClock::new();
+    let (events_tx, mut events) = mpsc::channel(64);
+    let (commands, command_rx) = mpsc::channel(8);
+    let client = GatewayClient::new(connector, clock.clone(), session(1.0), BASE_URL)
+        .with_commands(command_rx);
+    let task = tokio::spawn(client.run(events_tx));
+    commands
+        .send(GatewayCommand::Members {
+            guild: Snowflake(1),
+            channel: Snowflake(2),
+            offset: 100,
+        })
+        .await
+        .unwrap();
+    settle().await;
+    assert_eq!(server.next_sent(), None);
+    server.send_text(HELLO);
+    settle().await;
+    assert_eq!(sent_op(&mut server), 2);
+    assert_eq!(server.next_sent(), None);
+    server.send_text(READY);
+    settle().await;
+    assert!(matches!(
+        events.try_recv(),
+        Ok(GatewayEvent::Dispatch(DispatchEvent::Ready(_)))
+    ));
+    assert_eq!(sent_op(&mut server), 37);
+    assert_eq!(server.next_sent(), None);
+    server.send_text(MESSAGE_CREATE);
+    settle().await;
+    assert!(matches!(
+        events.try_recv(),
+        Ok(GatewayEvent::Dispatch(DispatchEvent::MessageCreate(_)))
+    ));
+    clock.advance(Duration::from_millis(749));
+    settle().await;
+    assert_eq!(server.next_sent(), None);
+    clock.advance(Duration::from_millis(1));
+    settle().await;
+    let Some(Sent::Text(packet)) = server.next_sent() else {
+        panic!("missing subscription");
+    };
+    let packet = json(&packet);
+    assert_eq!(
+        packet["d"]["subscriptions"]["1"]["channels"]["2"],
+        serde_json::json!([[100, 199]])
+    );
+    drop(events);
+    settle().await;
+    assert!(task.await.unwrap().is_ok());
+}

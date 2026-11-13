@@ -9,12 +9,20 @@ use dc_protocol::Secret;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Method {
     Get,
+    Post,
+    Patch,
+    Delete,
+    Put,
 }
 
 impl Method {
     pub const fn as_str(self) -> &'static str {
         match self {
             Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Patch => "PATCH",
+            Method::Delete => "DELETE",
+            Method::Put => "PUT",
         }
     }
 }
@@ -29,6 +37,9 @@ pub struct HttpRequest {
     /// Full URL including query string. Must never contain secrets.
     pub url: String,
     pub authorization: Option<Secret<String>>,
+    /// JSON request body. Debug intentionally omits message content.
+    pub body: Option<Vec<u8>>,
+    pub content_type: Option<String>,
 }
 
 impl fmt::Debug for HttpRequest {
@@ -40,6 +51,7 @@ impl fmt::Debug for HttpRequest {
                 "authorization",
                 &self.authorization.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("body_bytes", &self.body.as_ref().map(Vec::len))
             .finish()
     }
 }
@@ -171,18 +183,20 @@ pub mod real {
             let client = reqwest::Client::builder()
                 .user_agent(USER_AGENT)
                 .https_only(true)
+                .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(15))
                 .timeout(Duration::from_secs(30))
                 .build()
                 .map_err(|err| HttpError(err.to_string()))?;
             Ok(ReqwestTransport { client })
         }
-    }
-
-    impl HttpTransport for ReqwestTransport {
-        async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        fn build_request(&self, request: HttpRequest) -> Result<reqwest::Request, HttpError> {
             let mut builder = match request.method {
                 Method::Get => self.client.get(&request.url),
+                Method::Post => self.client.post(&request.url),
+                Method::Patch => self.client.patch(&request.url),
+                Method::Delete => self.client.delete(&request.url),
+                Method::Put => self.client.put(&request.url),
             };
             if let Some(token) = &request.authorization {
                 let mut value = HeaderValue::from_str(token.expose_secret())
@@ -191,8 +205,30 @@ pub mod real {
                 value.set_sensitive(true);
                 builder = builder.header(AUTHORIZATION, value);
             }
-            let response = builder
-                .send()
+            if let Some(body) = request.body {
+                builder = builder
+                    .header(
+                        "Content-Type",
+                        request
+                            .content_type
+                            .as_deref()
+                            .unwrap_or("application/json"),
+                    )
+                    .body(body);
+            }
+
+            builder
+                .build()
+                .map_err(|err| HttpError(err.without_url().to_string()))
+        }
+    }
+
+    impl HttpTransport for ReqwestTransport {
+        async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+            let request = self.build_request(request)?;
+            let response = self
+                .client
+                .execute(request)
                 .await
                 .map_err(|err| HttpError(err.without_url().to_string()))?;
             let status = response.status().as_u16();
@@ -203,16 +239,47 @@ pub mod real {
                     Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
                 })
                 .collect();
-            let body = response
-                .bytes()
+            let mut response = response;
+            let mut body = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
                 .await
                 .map_err(|err| HttpError(err.without_url().to_string()))?
-                .to_vec();
+            {
+                if body.len() + chunk.len() > 32 * 1024 * 1024 {
+                    return Err(HttpError("Response exceeds the 32 MiB limit".into()));
+                }
+                body.extend_from_slice(&chunk);
+            }
             Ok(HttpResponse {
                 status,
                 headers,
                 body,
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn multipart_content_type_and_sensitive_authorization_reach_request_builder() {
+            let transport = ReqwestTransport::new().unwrap();
+            let request = transport
+                .build_request(HttpRequest {
+                    method: Method::Post,
+                    url: "https://example.invalid".into(),
+                    authorization: Some(dc_protocol::Secret::new("synthetic-credential".into())),
+                    body: Some(b"synthetic multipart".to_vec()),
+                    content_type: Some("multipart/form-data; boundary=synthetic".into()),
+                })
+                .unwrap();
+            assert_eq!(
+                request.headers()["Content-Type"],
+                "multipart/form-data; boundary=synthetic"
+            );
+            assert!(request.headers()["Authorization"].is_sensitive());
+            assert!(!format!("{:?}", request.headers()).contains("synthetic-credential"));
         }
     }
 
@@ -258,6 +325,8 @@ mod tests {
             method: Method::Get,
             url: "https://api.example.invalid/x".into(),
             authorization: Some(Secret::new(fake.to_owned())),
+            body: None,
+            content_type: None,
         };
         let rendered = format!("{request:?} {request:#?}");
         assert!(!rendered.contains(fake), "leaked: {rendered}");

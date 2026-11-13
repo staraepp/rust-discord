@@ -13,8 +13,12 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
 dc-api.workspace = true
 dc-core.workspace = true
+dc-plugin-host.workspace = true
+dc-store.workspace = true
 dc-gateway.workspace = true
 dc-protocol.workspace = true
 dc-ui.workspace = true
@@ -25,3 +29,9 @@ tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["async-secret-service", "tokio", "crypto-rust"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }

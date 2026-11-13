@@ -1,8 +1,9 @@
-//! Dev task runner: `cargo xtask <ci|fmt|clippy|test|deny>`.
+//! Dev task runner: `cargo xtask <ci|fmt|clippy|test|deny|licenses>`.
 //!
 //! `ci` runs exactly the "Definition of done" checks from CLAUDE.md, in order.
 
 use std::process::{Command, ExitCode};
+mod licenses;
 
 const STEPS: &[(&str, &[&str])] = &[
     ("fmt", &["fmt", "--all", "--", "--check"]),
@@ -40,11 +41,23 @@ fn run(name: &str, args: &[&str]) -> bool {
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
     let ok = match task.as_str() {
+        "licenses" => {
+            let path = std::env::args()
+                .nth(2)
+                .unwrap_or_else(|| "work/THIRD_PARTY_LICENSES.txt".into());
+            match licenses::collect(std::path::Path::new(&path)) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("License collection failed: {error}");
+                    false
+                }
+            }
+        }
         "ci" => STEPS.iter().all(|(name, args)| run(name, args)),
         other => match STEPS.iter().find(|(name, _)| *name == other) {
             Some((name, args)) => run(name, args),
             None => {
-                println!("usage: cargo xtask <ci|fmt|clippy|test|deny>");
+                println!("usage: cargo xtask <ci|fmt|clippy|test|deny|licenses>");
                 false
             }
         },

@@ -21,3 +21,5 @@ pub mod ws;
 pub use client::{GatewayClient, GatewayError, GatewayEvent};
 pub use session::{Action, FatalReason, Session, SessionConfig};
 pub use transport::{Connector, Incoming, Transport, TransportError};
+
+pub use client::GatewayCommand;

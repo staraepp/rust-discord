@@ -6,6 +6,8 @@
 //! is a later milestone.
 
 use std::collections::HashMap;
+pub mod members;
+use dc_protocol::members::{CustomEmoji, Member, MemberUpdate, Role};
 
 use dc_protocol::Snowflake;
 use dc_protocol::gateway::DispatchEvent;
@@ -19,9 +21,13 @@ pub const MAX_MESSAGES_PER_CHANNEL: usize = 500;
 pub struct GuildEntry {
     pub id: Snowflake,
     pub name: String,
+    /// Icon hash, if any.
+    pub icon: Option<String>,
     pub unavailable: bool,
     /// Channel and thread IDs, in the order received.
     pub channels: Vec<Snowflake>,
+    pub roles: Vec<Role>,
+    pub emojis: Vec<CustomEmoji>,
 }
 
 /// What a call to [`Store::apply`] changed, so the UI knows what to redraw.
@@ -43,6 +49,11 @@ pub struct Store {
     guilds: Vec<GuildEntry>,
     private_channels: Vec<Snowflake>,
     channels: HashMap<Snowflake, Channel>,
+    /// Every user seen so far (self, DM recipients, message authors,
+    /// mentioned users). Later sightings replace earlier ones.
+    users: HashMap<Snowflake, User>,
+    member_lists: HashMap<Snowflake, members::MemberList>,
+    members: HashMap<Snowflake, HashMap<Snowflake, Member>>,
     /// Per channel, oldest first, unique by message ID.
     messages: HashMap<Snowflake, Vec<Message>>,
 }
@@ -70,6 +81,28 @@ impl Store {
         self.channels.get(&id)
     }
 
+    /// A user seen in any payload so far.
+    pub fn user(&self, id: Snowflake) -> Option<&User> {
+        self.users.get(&id)
+    }
+
+    /// The guild a channel belongs to, if it is a guild channel.
+    pub fn guild(&self, id: Snowflake) -> Option<&GuildEntry> {
+        self.guilds.iter().find(|g| g.id == id)
+    }
+
+    pub fn member_list(&self, guild: Snowflake) -> Option<&members::MemberList> {
+        self.member_lists.get(&guild)
+    }
+    pub fn guild_members(&self, guild: Snowflake) -> Vec<&Member> {
+        self.members
+            .get(&guild)
+            .map(|m| m.values().collect())
+            .unwrap_or_default()
+    }
+    pub fn clear_member_list(&mut self, guild: Snowflake) {
+        self.member_lists.remove(&guild);
+    }
     /// Messages of a channel, oldest first.
     pub fn messages(&self, channel_id: Snowflake) -> &[Message] {
         self.messages.get(&channel_id).map_or(&[], Vec::as_slice)
@@ -120,6 +153,156 @@ impl Store {
                     Change::Messages(delete.channel_id)
                 }
             }
+            DispatchEvent::Unknown { name, data }
+                if matches!(name.as_str(), "CHANNEL_CREATE" | "CHANNEL_UPDATE") =>
+            {
+                let Some(id) = data
+                    .get("id")
+                    .and_then(|v| serde_json::from_value::<Snowflake>(v.clone()).ok())
+                else {
+                    return Change::None;
+                };
+                let mut merged = self
+                    .channels
+                    .get(&id)
+                    .and_then(|c| serde_json::to_value(c).ok())
+                    .unwrap_or(serde_json::json!({}));
+                if let (Some(target), Some(incoming)) = (merged.as_object_mut(), data.as_object()) {
+                    target.extend(incoming.clone());
+                }
+                if let Ok(channel) = serde_json::from_value::<Channel>(merged) {
+                    if let Some(guild_id) = channel.guild_id {
+                        if let Some(guild) = self.guilds.iter_mut().find(|g| g.id == guild_id)
+                            && !guild.channels.contains(&id)
+                        {
+                            guild.channels.push(id);
+                        }
+                    } else if matches!(
+                        channel.kind,
+                        dc_protocol::model::ChannelType::Dm
+                            | dc_protocol::model::ChannelType::GroupDm
+                    ) && !self.private_channels.contains(&id)
+                    {
+                        self.private_channels.push(id);
+                    }
+                    for user in &channel.recipients {
+                        self.users.insert(user.id, user.clone());
+                    }
+                    self.channels.insert(id, channel);
+                    Change::Guilds
+                } else {
+                    Change::None
+                }
+            }
+            DispatchEvent::Unknown { name, data } if name == "CHANNEL_DELETE" => {
+                let Some(id) = data
+                    .get("id")
+                    .and_then(|v| serde_json::from_value::<Snowflake>(v.clone()).ok())
+                else {
+                    return Change::None;
+                };
+                self.channels.remove(&id);
+                self.messages.remove(&id);
+                self.private_channels.retain(|c| *c != id);
+                for guild in &mut self.guilds {
+                    guild.channels.retain(|c| *c != id);
+                }
+                Change::Guilds
+            }
+            DispatchEvent::Unknown { name, data } if name == "GUILD_DELETE" => {
+                let Some(id) = data
+                    .get("id")
+                    .and_then(|v| serde_json::from_value::<Snowflake>(v.clone()).ok())
+                else {
+                    return Change::None;
+                };
+                if data.get("unavailable").and_then(|v| v.as_bool()) == Some(true) {
+                    if let Some(guild) = self.guilds.iter_mut().find(|g| g.id == id) {
+                        guild.unavailable = true;
+                    }
+                } else {
+                    if let Some(guild) = self.guilds.iter().find(|g| g.id == id) {
+                        for channel in &guild.channels {
+                            self.channels.remove(channel);
+                            self.messages.remove(channel);
+                        }
+                    }
+                    self.guilds.retain(|g| g.id != id);
+                    self.members.remove(&id);
+                    self.member_lists.remove(&id);
+                }
+                Change::Guilds
+            }
+            DispatchEvent::Unknown { name, data } if name == "USER_UPDATE" => {
+                let Some(id) = data
+                    .get("id")
+                    .and_then(|v| serde_json::from_value::<Snowflake>(v.clone()).ok())
+                else {
+                    return Change::None;
+                };
+                let mut merged = self
+                    .users
+                    .get(&id)
+                    .and_then(|u| serde_json::to_value(u).ok())
+                    .unwrap_or(serde_json::json!({}));
+                if let (Some(target), Some(incoming)) = (merged.as_object_mut(), data.as_object()) {
+                    target.extend(incoming.clone());
+                }
+                if let Ok(user) = serde_json::from_value::<User>(merged) {
+                    if self.current_user.as_ref().is_some_and(|u| u.id == id) {
+                        self.current_user = Some(user.clone());
+                    }
+                    self.users.insert(id, user);
+                }
+                Change::Guilds
+            }
+            DispatchEvent::Unknown { name, data } if name == "MESSAGE_DELETE_BULK" => {
+                let Some(channel) = data
+                    .get("channel_id")
+                    .and_then(|v| serde_json::from_value::<Snowflake>(v.clone()).ok())
+                else {
+                    return Change::None;
+                };
+                if let Some(ids) = data.get("ids").and_then(|v| v.as_array())
+                    && let Some(messages) = self.messages.get_mut(&channel)
+                {
+                    let ids: Vec<_> = ids
+                        .iter()
+                        .filter_map(|v| serde_json::from_value::<Snowflake>(v.clone()).ok())
+                        .collect();
+                    messages.retain(|m| !ids.contains(&m.id));
+                }
+                Change::Messages(channel)
+            }
+            DispatchEvent::Unknown { name, data } if name == "GUILD_MEMBER_LIST_UPDATE" => {
+                let Ok(update) = serde_json::from_value::<MemberUpdate>(data.clone()) else {
+                    return Change::None;
+                };
+                let list = self.member_lists.entry(update.guild_id).or_default();
+                list.apply(&update);
+                for item in list.slots.iter().flatten() {
+                    if let Some(member) = &item.member {
+                        self.users.insert(member.user.id, member.user.clone());
+                        self.members
+                            .entry(update.guild_id)
+                            .or_default()
+                            .insert(member.user.id, member.clone());
+                    }
+                }
+                Change::Guilds
+            }
+            DispatchEvent::Unknown { name, data } if name == "GUILD_EMOJIS_UPDATE" => {
+                if let (Some(id), Some(emojis)) = (
+                    data.get("guild_id")
+                        .and_then(|v| serde_json::from_value::<Snowflake>(v.clone()).ok()),
+                    data.get("emojis")
+                        .and_then(|v| serde_json::from_value::<Vec<CustomEmoji>>(v.clone()).ok()),
+                ) && let Some(guild) = self.guilds.iter_mut().find(|g| g.id == id)
+                {
+                    guild.emojis = emojis;
+                }
+                Change::Guilds
+            }
             DispatchEvent::Resumed | DispatchEvent::Unknown { .. } => Change::None,
         }
     }
@@ -137,11 +320,15 @@ impl Store {
         // A fresh READY is a full snapshot: drop everything from before.
         *self = Store::default();
         self.current_user = Some(ready.user.clone());
+        self.users.insert(ready.user.id, ready.user.clone());
         for guild in &ready.guilds {
             self.upsert_guild(guild);
         }
         for channel in &ready.private_channels {
             self.private_channels.push(channel.id);
+            for user in &channel.recipients {
+                self.users.insert(user.id, user.clone());
+            }
             self.channels.insert(channel.id, channel.clone());
         }
     }
@@ -150,6 +337,13 @@ impl Store {
         let Some(id) = guild.id() else {
             return;
         };
+        for member in &guild.members {
+            self.users.insert(member.user.id, member.user.clone());
+            self.members
+                .entry(id)
+                .or_default()
+                .insert(member.user.id, member.clone());
+        }
         let mut channel_ids = Vec::new();
         for channel in guild.channels.iter().chain(&guild.threads) {
             let mut channel = channel.clone();
@@ -161,8 +355,11 @@ impl Store {
         let entry = GuildEntry {
             id,
             name: guild.name().unwrap_or_default().to_owned(),
+            icon: guild.icon().map(str::to_owned),
             unavailable: guild.unavailable,
             channels: channel_ids,
+            roles: guild.roles.clone(),
+            emojis: guild.emojis.clone(),
         };
         match self.guilds.iter_mut().find(|g| g.id == id) {
             Some(existing) => {
@@ -181,6 +378,10 @@ impl Store {
     /// Inserts keeping the list sorted by ID (snowflakes are time-ordered)
     /// and unique; an existing message with the same ID is replaced.
     fn insert_message(&mut self, message: Message) {
+        self.users.insert(message.author.id, message.author.clone());
+        for user in &message.mentions {
+            self.users.entry(user.id).or_insert_with(|| user.clone());
+        }
         let list = self.messages.entry(message.channel_id).or_default();
         match list.binary_search_by_key(&message.id, |m| m.id) {
             Ok(index) => list[index] = message,
@@ -250,6 +451,16 @@ mod tests {
         assert_eq!(general.guild_id, Some(guilds[0].id));
 
         assert_eq!(store.private_channels().len(), 2);
+        // Users are indexed: self and DM recipients.
+        assert!(store.user(Snowflake(100_000_000_000_000_001)).is_some());
+        assert_eq!(
+            store
+                .user(Snowflake(100_000_000_000_000_003))
+                .unwrap()
+                .username,
+            "other_fake"
+        );
+        assert_eq!(store.guild(guilds[0].id).unwrap().icon, None);
         assert!(store.channel(store.private_channels()[0]).is_some());
     }
 
@@ -364,5 +575,39 @@ mod tests {
         assert_eq!(store.guilds()[1].name, "Back Online");
         assert!(!store.guilds()[1].unavailable);
         assert!(store.channel(Snowflake(300_000_000_000_000_900)).is_some());
+    }
+}
+
+pub mod cache;
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+    use serde_json::json;
+    fn unknown(name: &str, data: serde_json::Value) -> DispatchEvent {
+        DispatchEvent::Unknown {
+            name: name.into(),
+            data,
+        }
+    }
+    #[test]
+    fn partial_channel_updates_preserve_other_fields_and_delete_removes_it() {
+        let mut store = Store::new();
+        store.apply(&unknown(
+            "CHANNEL_CREATE",
+            json!({"id":"1","type":1,"recipients":[{"id":"2","username":"friend"}]}),
+        ));
+        store.apply(&unknown(
+            "CHANNEL_UPDATE",
+            json!({"id":"1","name":"Renamed"}),
+        ));
+        assert_eq!(
+            store.channel(Snowflake(1)).unwrap().kind,
+            dc_protocol::model::ChannelType::Dm
+        );
+        assert_eq!(store.channel(Snowflake(1)).unwrap().recipients.len(), 1);
+        store.apply(&unknown("CHANNEL_DELETE", json!({"id":"1"})));
+        assert!(store.channel(Snowflake(1)).is_none());
+        assert!(store.private_channels().is_empty());
     }
 }

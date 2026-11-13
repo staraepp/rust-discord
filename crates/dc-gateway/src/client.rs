@@ -26,6 +26,16 @@ pub enum GatewayError {
     Fatal(#[from] FatalReason),
 }
 
+/// Commands requested by explicit navigation in the desktop UI.
+#[derive(Clone, Debug)]
+pub enum GatewayCommand {
+    Members {
+        guild: dc_protocol::Snowflake,
+        channel: dc_protocol::Snowflake,
+        offset: usize,
+    },
+}
+
 enum Flow {
     Continue,
     Reconnect(Duration),
@@ -39,6 +49,8 @@ pub struct GatewayClient<Cn, Ck> {
     clock: Ck,
     session: Session,
     base_url: String,
+    commands: Option<mpsc::Receiver<GatewayCommand>>,
+    subscribed_guilds: std::collections::HashSet<dc_protocol::Snowflake>,
 }
 
 impl<Cn: Connector, Ck: Clock> GatewayClient<Cn, Ck> {
@@ -50,7 +62,14 @@ impl<Cn: Connector, Ck: Clock> GatewayClient<Cn, Ck> {
             clock,
             session,
             base_url: base_url.into(),
+            commands: None,
+            subscribed_guilds: std::collections::HashSet::new(),
         }
+    }
+
+    pub fn with_commands(mut self, commands: mpsc::Receiver<GatewayCommand>) -> Self {
+        self.commands = Some(commands);
+        self
     }
 
     /// Runs until the receiver of `events` is dropped (returns `Ok`) or the
@@ -97,6 +116,9 @@ impl<Cn: Connector, Ck: Clock> GatewayClient<Cn, Ck> {
         conn: &mut Cn::Conn,
         events: &mpsc::Sender<GatewayEvent>,
     ) -> Flow {
+        let mut next_command_at = Duration::ZERO;
+        let mut member_packets = std::collections::VecDeque::new();
+        self.subscribed_guilds.clear();
         loop {
             let now = self.clock.now();
             let sleep_for = self
@@ -111,6 +133,21 @@ impl<Cn: Connector, Ck: Clock> GatewayClient<Cn, Ck> {
                     conn.close(dc_protocol::close::code::NORMAL).await;
                     return Flow::Shutdown;
                 }
+                command = receive_command(&mut self.commands), if self.session.is_active() && member_packets.is_empty() => {
+                    match command {
+                        Some(GatewayCommand::Members { guild, channel, offset }) if offset < 2000 => {
+                            if self.subscribed_guilds.insert(guild) { member_packets.push_back(dc_protocol::gateway::GatewaySend::GuildSubscription { guild_id: guild, channel: None }); }
+                            member_packets.push_back(dc_protocol::gateway::GatewaySend::GuildSubscription { guild_id: guild, channel: Some((channel, offset / 100 * 100)) });
+                        }
+                        Some(_) => {}
+                        None => self.commands = None,
+                    }
+                    Vec::new()
+                },
+                () = self.clock.sleep(next_command_at.saturating_sub(now)), if self.session.is_active() && !member_packets.is_empty() => {
+                    next_command_at = self.clock.now() + Duration::from_millis(750);
+                    vec![Action::Send(member_packets.pop_front().unwrap())]
+                },
                 incoming = conn.recv() => match incoming {
                     Ok(Incoming::Text(text)) => self.session.on_text(&text, self.clock.now()),
                     Ok(Incoming::Closed(code)) => {
@@ -201,6 +238,15 @@ impl<Cn: Connector, Ck: Clock> GatewayClient<Cn, Ck> {
 async fn sleep_opt<C: Clock>(clock: &C, duration: Option<Duration>) {
     match duration {
         Some(duration) => clock.sleep(duration).await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn receive_command(
+    commands: &mut Option<mpsc::Receiver<GatewayCommand>>,
+) -> Option<GatewayCommand> {
+    match commands {
+        Some(receiver) => receiver.recv().await,
         None => std::future::pending().await,
     }
 }

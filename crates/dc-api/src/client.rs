@@ -4,12 +4,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use dc_protocol::model::{ApiErrorBody, GatewayInfo, Message};
+use dc_protocol::model::{ApiErrorBody, CreateMessage, GatewayInfo, Message};
 use dc_protocol::time::Clock;
 use dc_protocol::{Secret, Snowflake};
 use serde::de::DeserializeOwned;
 
-use crate::http::{HttpError, HttpRequest, HttpTransport};
+use crate::http::{HttpError, HttpRequest, HttpTransport, Method};
 use crate::ratelimit::{RateLimitHeaders, RateLimiter, Route};
 
 /// Maximum `limit` for List Messages.
@@ -109,6 +109,102 @@ impl<H: HttpTransport, C: Clock> ApiClient<H, C> {
             .await
     }
 
+    /// Downloads a public CDN asset (avatar, icon, banner, decoration).
+    ///
+    /// Only `https://cdn.discordapp.com/` URLs are accepted, and the token
+    /// is never attached: the CDN is public.
+    pub async fn get_cdn(&self, url: &str) -> Result<Vec<u8>, ApiError> {
+        const PREFIX: &str = "https://cdn.discordapp.com/";
+        if !url.starts_with(PREFIX) || url.contains(['\n', '\r', ' ']) {
+            return Err(ApiError::InvalidArgument("not a Discord CDN URL"));
+        }
+        self.execute(Route::cdn(), url.to_owned(), None, None, None)
+            .await
+    }
+
+    /// Sends one user-submitted message. Only explicit 429 responses are
+    /// retried; ambiguous transport failures return to the composer so the
+    /// user can retry with the same deduplication nonce.
+    pub async fn create_message(
+        &self,
+        channel: Snowflake,
+        message: &CreateMessage,
+    ) -> Result<Message, ApiError> {
+        validate_content(&message.content)?;
+        if message.nonce.is_empty() || message.nonce.len() > 25 {
+            return Err(ApiError::InvalidArgument("nonce must contain 1-25 bytes"));
+        }
+        let body = self
+            .write_json(Route::create_message(channel), message)
+            .await?;
+        serde_json::from_slice(&body).map_err(ApiError::Decode)
+    }
+
+    pub async fn edit_message(
+        &self,
+        channel: Snowflake,
+        message: Snowflake,
+        content: &str,
+    ) -> Result<Message, ApiError> {
+        validate_content(content)?;
+        let body = self
+            .write_json(
+                Route::message(channel, message, Method::Patch),
+                &serde_json::json!({"content":content}),
+            )
+            .await?;
+        serde_json::from_slice(&body).map_err(ApiError::Decode)
+    }
+
+    pub async fn delete_message(
+        &self,
+        channel: Snowflake,
+        message: Snowflake,
+    ) -> Result<(), ApiError> {
+        self.write_json(
+            Route::message(channel, message, Method::Delete),
+            &serde_json::json!({}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn write_json<T: serde::Serialize>(
+        &self,
+        route: Route,
+        value: &T,
+    ) -> Result<Vec<u8>, ApiError> {
+        if self.token_rejected.load(Ordering::Relaxed) {
+            return Err(ApiError::Unauthorized);
+        }
+        let token = self
+            .token
+            .clone()
+            .ok_or(ApiError::InvalidArgument("this endpoint needs a token"))?;
+        let body = serde_json::to_vec(value).map_err(ApiError::Decode)?;
+        let url = format!("{}{}", self.base_url, route.path);
+        self.execute(route, url, Some(token), Some(body), None)
+            .await
+    }
+
+    pub(crate) async fn post_body(
+        &self,
+        route: Route,
+        body: Vec<u8>,
+        content_type: String,
+    ) -> Result<Vec<u8>, ApiError> {
+        if self.token_rejected.load(Ordering::Relaxed) {
+            return Err(ApiError::Unauthorized);
+        }
+        let token = self
+            .token
+            .clone()
+            .ok_or(ApiError::InvalidArgument("this endpoint needs a token"))?;
+        let url = format!("{}{}", self.base_url, route.path);
+        self.execute(route, url, Some(token), Some(body), Some(content_type))
+            .await
+    }
+
     async fn get_json<T: DeserializeOwned>(
         &self,
         route: Route,
@@ -146,9 +242,25 @@ impl<H: HttpTransport, C: Clock> ApiClient<H, C> {
             url.push_str(value);
         }
 
+        self.execute(route, url, authorization, None, None).await
+    }
+
+    /// Sends one GET with rate limiting, 429 handling and error mapping.
+    async fn execute(
+        &self,
+        route: Route,
+        url: String,
+        authorization: Option<Secret<String>>,
+        body: Option<Vec<u8>>,
+        content_type: Option<String>,
+    ) -> Result<Vec<u8>, ApiError> {
+        let authenticated = authorization.is_some();
         let mut attempt = 0;
         loop {
             self.wait_for_slot(&route).await?;
+            if authenticated && self.token_rejected.load(Ordering::Relaxed) {
+                return Err(ApiError::Unauthorized);
+            }
 
             let response = self
                 .http
@@ -156,6 +268,8 @@ impl<H: HttpTransport, C: Clock> ApiClient<H, C> {
                     method: route.method,
                     url: url.clone(),
                     authorization: authorization.clone(),
+                    body: body.clone(),
+                    content_type: content_type.clone(),
                 })
                 .await?;
 
@@ -237,4 +351,14 @@ impl<H: HttpTransport, C: Clock> ApiClient<H, C> {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+pub(crate) fn validate_content(content: &str) -> Result<(), ApiError> {
+    if content.trim().is_empty() {
+        return Err(ApiError::InvalidArgument("message is empty"));
+    }
+    if content.encode_utf16().count() > 2000 {
+        return Err(ApiError::InvalidArgument("message exceeds 2000 characters"));
+    }
+    Ok(())
 }

@@ -322,3 +322,93 @@ async fn authenticated_endpoint_without_token_makes_no_request() {
     ));
     assert!(http.requests().is_empty());
 }
+
+#[tokio::test]
+async fn create_message_posts_json_and_preserves_nonce_across_429() {
+    use dc_protocol::model::{AllowedMentions, CreateMessage};
+    let http = MockHttp::new();
+    let clock = FakeClock::new();
+    http.push(429, &[("Retry-After", "0")], "{}");
+    let response = serde_json::from_str::<Vec<dc_protocol::model::Message>>(MESSAGES)
+        .unwrap()
+        .remove(0);
+    http.push(200, &[], &serde_json::to_string(&response).unwrap());
+    let message = CreateMessage {
+        content: "hello 😀".into(),
+        nonce: "12345".into(),
+        message_reference: None,
+        allowed_mentions: AllowedMentions::default(),
+    };
+    let result = client(&http, &clock)
+        .create_message(CHANNEL, &message)
+        .await
+        .unwrap();
+    assert_eq!(result.id, response.id);
+    let requests = http.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, Method::Post);
+    assert_eq!(requests[0].body, requests[1].body);
+    let body: serde_json::Value =
+        serde_json::from_slice(requests[0].body.as_ref().unwrap()).unwrap();
+    assert_eq!(body["content"], "hello 😀");
+    assert_eq!(body["nonce"], "12345");
+    assert!(requests[0].authorization.is_some());
+    assert!(!format!("{:?}", requests[0]).contains("hello"));
+}
+
+#[tokio::test]
+async fn invalid_sends_never_touch_transport_and_transport_failures_are_not_retried() {
+    use dc_protocol::model::{AllowedMentions, CreateMessage};
+    let http = MockHttp::new();
+    let clock = FakeClock::new();
+    let api = client(&http, &clock);
+    let mut message = CreateMessage {
+        content: " \n".into(),
+        nonce: "12345".into(),
+        message_reference: None,
+        allowed_mentions: AllowedMentions::default(),
+    };
+    assert!(api.create_message(CHANNEL, &message).await.is_err());
+    message.content = "😀".repeat(1001);
+    assert!(api.create_message(CHANNEL, &message).await.is_err());
+    assert!(http.requests().is_empty());
+    http.push_error("offline");
+    message.content = "hello".into();
+    assert!(api.create_message(CHANNEL, &message).await.is_err());
+    assert_eq!(http.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn multipart_uploads_keep_json_nonce_and_binary_bytes_and_sanitize_headers() {
+    use dc_protocol::model::{AllowedMentions, CreateMessage};
+    let http = MockHttp::new();
+    let clock = FakeClock::new();
+    let response = serde_json::from_str::<Vec<dc_protocol::model::Message>>(MESSAGES)
+        .unwrap()
+        .remove(0);
+    http.push(200, &[], &serde_json::to_string(&response).unwrap());
+    let message = CreateMessage {
+        content: String::new(),
+        nonce: "12345".into(),
+        message_reference: None,
+        allowed_mentions: AllowedMentions::default(),
+    };
+    let files = [dc_api::UploadFile {
+        filename: "hello\"\r\n.png".into(),
+        bytes: vec![0, 255, 1],
+    }];
+    client(&http, &clock)
+        .create_message_with_files(CHANNEL, &message, &files)
+        .await
+        .unwrap();
+    let requests = http.requests();
+    let request = &requests[0];
+    let content_type = request.content_type.as_deref().unwrap();
+    assert!(content_type.starts_with("multipart/form-data; boundary=dc-upload-"));
+    let body = request.body.as_ref().unwrap();
+    let text = String::from_utf8_lossy(body);
+    assert!(text.contains("name=\"files[0]\""));
+    assert!(text.contains("hello___.png"));
+    assert!(text.contains("\"nonce\":\"12345\""));
+    assert!(body.windows(3).any(|part| part == [0, 255, 1]));
+}

@@ -8,6 +8,7 @@
 //! `extra` map on the small, frequently-inspected objects) and most fields
 //! have defaults, because the user API changes without notice.
 
+pub mod cdn;
 pub mod close;
 pub mod gateway;
 pub mod model;
@@ -35,3 +36,5 @@ pub enum ProtocolError {
         source: serde_json::Error,
     },
 }
+
+pub mod members;

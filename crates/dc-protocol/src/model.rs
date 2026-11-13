@@ -27,6 +27,21 @@ pub struct User {
     pub avatar: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    /// Banner hash; only present on some user objects.
+    #[serde(default)]
+    pub banner: Option<String>,
+    /// Banner color as an RGB integer; only present on some user objects.
+    #[serde(default)]
+    pub accent_color: Option<u32>,
+    #[serde(default)]
+    pub avatar_decoration_data: Option<AvatarDecoration>,
+}
+
+/// The avatar decoration a user has equipped.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AvatarDecoration {
+    /// Asset hash, used with the avatar-decoration-presets CDN route.
+    pub asset: String,
 }
 
 impl User {
@@ -184,6 +199,8 @@ pub struct GuildProperties {
     pub id: Option<Snowflake>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -199,6 +216,8 @@ pub struct Guild {
     pub raw_id: Option<Snowflake>,
     #[serde(default, rename = "name")]
     pub raw_name: Option<String>,
+    #[serde(default, rename = "icon")]
+    pub raw_icon: Option<String>,
     #[serde(default)]
     pub properties: Option<GuildProperties>,
     #[serde(default)]
@@ -209,6 +228,12 @@ pub struct Guild {
     pub channels: Vec<Channel>,
     #[serde(default)]
     pub threads: Vec<Channel>,
+    #[serde(default)]
+    pub members: Vec<crate::members::Member>,
+    #[serde(default)]
+    pub roles: Vec<crate::members::Role>,
+    #[serde(default)]
+    pub emojis: Vec<crate::members::CustomEmoji>,
 }
 
 impl Guild {
@@ -224,6 +249,13 @@ impl Guild {
         self.raw_name
             .as_deref()
             .or_else(|| self.properties.as_ref().and_then(|p| p.name.as_deref()))
+    }
+
+    /// Icon hash, if the guild has an icon.
+    pub fn icon(&self) -> Option<&str> {
+        self.raw_icon
+            .as_deref()
+            .or_else(|| self.properties.as_ref().and_then(|p| p.icon.as_deref()))
     }
 }
 
@@ -276,6 +308,40 @@ pub struct Message {
     /// Embeds, components, reactions, references, ... (not modelled in M0).
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// A human-submitted text message. Keep the nonce unchanged on a retry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateMessage {
+    pub content: String,
+    pub nonce: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_reference: Option<MessageReference>,
+    pub allowed_mentions: AllowedMentions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageReference {
+    pub message_id: Snowflake,
+    pub channel_id: Snowflake,
+    pub fail_if_not_exists: bool,
+}
+
+/// Mentions behave like a normal human-driven client; replies do not ping
+/// the author unless explicitly selected in the composer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedMentions {
+    pub parse: Vec<String>,
+    pub replied_user: bool,
+}
+
+impl Default for AllowedMentions {
+    fn default() -> Self {
+        Self {
+            parse: vec!["users".into(), "roles".into(), "everyone".into()],
+            replied_user: false,
+        }
+    }
 }
 
 /// MESSAGE_UPDATE data.
