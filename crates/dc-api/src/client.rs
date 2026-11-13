@@ -109,6 +109,18 @@ impl<H: HttpTransport, C: Clock> ApiClient<H, C> {
             .await
     }
 
+    /// Downloads a public CDN asset (avatar, icon, banner, decoration).
+    ///
+    /// Only `https://cdn.discordapp.com/` URLs are accepted, and the token
+    /// is never attached: the CDN is public.
+    pub async fn get_cdn(&self, url: &str) -> Result<Vec<u8>, ApiError> {
+        const PREFIX: &str = "https://cdn.discordapp.com/";
+        if !url.starts_with(PREFIX) || url.contains(['\n', '\r', ' ']) {
+            return Err(ApiError::InvalidArgument("not a Discord CDN URL"));
+        }
+        self.execute(Route::cdn(), url.to_owned(), None).await
+    }
+
     async fn get_json<T: DeserializeOwned>(
         &self,
         route: Route,
@@ -146,6 +158,17 @@ impl<H: HttpTransport, C: Clock> ApiClient<H, C> {
             url.push_str(value);
         }
 
+        self.execute(route, url, authorization).await
+    }
+
+    /// Sends one GET with rate limiting, 429 handling and error mapping.
+    async fn execute(
+        &self,
+        route: Route,
+        url: String,
+        authorization: Option<Secret<String>>,
+    ) -> Result<Vec<u8>, ApiError> {
+        let authenticated = authorization.is_some();
         let mut attempt = 0;
         loop {
             self.wait_for_slot(&route).await?;

@@ -27,6 +27,21 @@ pub struct User {
     pub avatar: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    /// Banner hash; only present on some user objects.
+    #[serde(default)]
+    pub banner: Option<String>,
+    /// Banner color as an RGB integer; only present on some user objects.
+    #[serde(default)]
+    pub accent_color: Option<u32>,
+    #[serde(default)]
+    pub avatar_decoration_data: Option<AvatarDecoration>,
+}
+
+/// The avatar decoration a user has equipped.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AvatarDecoration {
+    /// Asset hash, used with the avatar-decoration-presets CDN route.
+    pub asset: String,
 }
 
 impl User {
@@ -184,6 +199,8 @@ pub struct GuildProperties {
     pub id: Option<Snowflake>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -199,6 +216,8 @@ pub struct Guild {
     pub raw_id: Option<Snowflake>,
     #[serde(default, rename = "name")]
     pub raw_name: Option<String>,
+    #[serde(default, rename = "icon")]
+    pub raw_icon: Option<String>,
     #[serde(default)]
     pub properties: Option<GuildProperties>,
     #[serde(default)]
@@ -224,6 +243,13 @@ impl Guild {
         self.raw_name
             .as_deref()
             .or_else(|| self.properties.as_ref().and_then(|p| p.name.as_deref()))
+    }
+
+    /// Icon hash, if the guild has an icon.
+    pub fn icon(&self) -> Option<&str> {
+        self.raw_icon
+            .as_deref()
+            .or_else(|| self.properties.as_ref().and_then(|p| p.icon.as_deref()))
     }
 }
 

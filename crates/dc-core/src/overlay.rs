@@ -79,15 +79,23 @@ pub struct ProfileOverride {
     /// Profile accent ("banner") color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<Color>,
-    /// Profile banner image: a local file path or an https URL.
+    /// Profile banner image: a local file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub banner: Option<String>,
-    /// Avatar image: a local file path or an https URL.
+    /// Avatar image: a local file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
-    /// Avatar decoration image: a local file path or an https URL.
+    /// Avatar decoration: a local image file path, or the asset hash of a
+    /// decoration from Discord's catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_decoration: Option<String>,
+    /// Background tint of the profile card (with `accent_color` it forms the
+    /// card's two-color gradient).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_color: Option<Color>,
+    /// "About me" text shown on the profile card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
 }
 
 /// The whole cosmetics configuration.
@@ -114,6 +122,8 @@ pub struct UserView {
     /// Local override only; Discord's own avatar is not resolved here yet.
     pub avatar: Option<String>,
     pub avatar_decoration: Option<String>,
+    pub profile_color: Option<Color>,
+    pub bio: Option<String>,
     /// True if any local override changed how this user looks.
     pub customized: bool,
 }
@@ -157,6 +167,8 @@ impl LocalOverlay {
             banner: pick(specific, me, |o| &o.banner),
             avatar: pick(specific, me, |o| &o.avatar),
             avatar_decoration: pick(specific, me, |o| &o.avatar_decoration),
+            profile_color: pick(specific, me, |o| &o.profile_color),
+            bio: pick(specific, me, |o| &o.bio),
             customized: false,
         };
         let customized = display_name.is_some()
@@ -164,7 +176,9 @@ impl LocalOverlay {
             || view.accent_color.is_some()
             || view.banner.is_some()
             || view.avatar.is_some()
-            || view.avatar_decoration.is_some();
+            || view.avatar_decoration.is_some()
+            || view.profile_color.is_some()
+            || view.bio.is_some();
         UserView { customized, ..view }
     }
 }
@@ -184,6 +198,9 @@ mod tests {
             global_name: global.map(str::to_owned),
             avatar: None,
             bot: false,
+            banner: None,
+            accent_color: None,
+            avatar_decoration_data: None,
         }
     }
 

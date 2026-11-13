@@ -39,6 +39,16 @@ impl Route {
         }
     }
 
+    /// A CDN asset. All CDN downloads share one bucket.
+    pub fn cdn() -> Self {
+        Route {
+            method: Method::Get,
+            template: "cdn",
+            major: None,
+            path: String::new(),
+        }
+    }
+
     /// `GET /channels/{channel.id}/messages`
     pub fn channel_messages(channel_id: Snowflake) -> Self {
         Route {

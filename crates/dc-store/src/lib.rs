@@ -19,6 +19,8 @@ pub const MAX_MESSAGES_PER_CHANNEL: usize = 500;
 pub struct GuildEntry {
     pub id: Snowflake,
     pub name: String,
+    /// Icon hash, if any.
+    pub icon: Option<String>,
     pub unavailable: bool,
     /// Channel and thread IDs, in the order received.
     pub channels: Vec<Snowflake>,
@@ -43,6 +45,9 @@ pub struct Store {
     guilds: Vec<GuildEntry>,
     private_channels: Vec<Snowflake>,
     channels: HashMap<Snowflake, Channel>,
+    /// Every user seen so far (self, DM recipients, message authors,
+    /// mentioned users). Later sightings replace earlier ones.
+    users: HashMap<Snowflake, User>,
     /// Per channel, oldest first, unique by message ID.
     messages: HashMap<Snowflake, Vec<Message>>,
 }
@@ -68,6 +73,16 @@ impl Store {
 
     pub fn channel(&self, id: Snowflake) -> Option<&Channel> {
         self.channels.get(&id)
+    }
+
+    /// A user seen in any payload so far.
+    pub fn user(&self, id: Snowflake) -> Option<&User> {
+        self.users.get(&id)
+    }
+
+    /// The guild a channel belongs to, if it is a guild channel.
+    pub fn guild(&self, id: Snowflake) -> Option<&GuildEntry> {
+        self.guilds.iter().find(|g| g.id == id)
     }
 
     /// Messages of a channel, oldest first.
@@ -137,11 +152,15 @@ impl Store {
         // A fresh READY is a full snapshot: drop everything from before.
         *self = Store::default();
         self.current_user = Some(ready.user.clone());
+        self.users.insert(ready.user.id, ready.user.clone());
         for guild in &ready.guilds {
             self.upsert_guild(guild);
         }
         for channel in &ready.private_channels {
             self.private_channels.push(channel.id);
+            for user in &channel.recipients {
+                self.users.insert(user.id, user.clone());
+            }
             self.channels.insert(channel.id, channel.clone());
         }
     }
@@ -161,6 +180,7 @@ impl Store {
         let entry = GuildEntry {
             id,
             name: guild.name().unwrap_or_default().to_owned(),
+            icon: guild.icon().map(str::to_owned),
             unavailable: guild.unavailable,
             channels: channel_ids,
         };
@@ -181,6 +201,10 @@ impl Store {
     /// Inserts keeping the list sorted by ID (snowflakes are time-ordered)
     /// and unique; an existing message with the same ID is replaced.
     fn insert_message(&mut self, message: Message) {
+        self.users.insert(message.author.id, message.author.clone());
+        for user in &message.mentions {
+            self.users.entry(user.id).or_insert_with(|| user.clone());
+        }
         let list = self.messages.entry(message.channel_id).or_default();
         match list.binary_search_by_key(&message.id, |m| m.id) {
             Ok(index) => list[index] = message,
@@ -250,6 +274,13 @@ mod tests {
         assert_eq!(general.guild_id, Some(guilds[0].id));
 
         assert_eq!(store.private_channels().len(), 2);
+        // Users are indexed: self and DM recipients.
+        assert!(store.user(Snowflake(100_000_000_000_000_001)).is_some());
+        assert_eq!(
+            store.user(Snowflake(100_000_000_000_000_003)).unwrap().username,
+            "other_fake"
+        );
+        assert_eq!(store.guild(guilds[0].id).unwrap().icon, None);
         assert!(store.channel(store.private_channels()[0]).is_some());
     }
 

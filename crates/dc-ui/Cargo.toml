@@ -13,15 +13,13 @@ dc-protocol.workspace = true
 dc-store.workspace = true
 futures.workspace = true
 gpui.workspace = true
+serde_json.workspace = true
 
 # Not used by this crate's code. See the note next to `gpui` in the workspace
 # Cargo.toml: this keeps `cargo update` from picking a libc that breaks the
 # GPUI build on Linux.
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.189"
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true
