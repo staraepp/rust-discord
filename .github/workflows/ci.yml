@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install GPUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libvulkan-dev libxcb1-dev libfontconfig-dev
       # rust-toolchain.toml pins the toolchain; rustup installs it on first use.
       - run: rustup show
       - uses: taiki-e/install-action@v2

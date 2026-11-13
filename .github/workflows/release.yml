@@ -51,6 +51,9 @@ jobs:
           sudo -u builder makepkg --noconfirm
           pacman -U --noconfirm ./*.pkg.tar.zst
           dc-cli help
+          # The GUI cannot open a window here; check it starts far enough to
+          # ask for the token.
+          dc-client 2>&1 | grep -q "DC_TOKEN is not set"
           sha256sum ./*.pkg.tar.zst > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
@@ -86,5 +89,5 @@ jobs:
           gh release create "$TAG" dist/* \
             --target "$GITHUB_SHA" \
             --prerelease \
-            --title "$TAG (M0 protocol spike)" \
+            --title "$TAG (early preview)" \
             --notes-file packaging/RELEASE_NOTES.md
