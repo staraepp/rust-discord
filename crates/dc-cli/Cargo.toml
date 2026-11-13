@@ -1,0 +1,23 @@
+[package]
+name = "dc-cli"
+description = "Headless dev tool: watch one channel over the gateway, or fetch recent messages over REST."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dc-api.workspace = true
+dc-gateway.workspace = true
+dc-protocol.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
