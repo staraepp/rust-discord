@@ -42,6 +42,11 @@ passes (also available as `cargo xtask ci` / `just ci`).
   Linux job (`cargo xtask ci`) and the Windows job (`cargo test --workspace`)
   passed.
 
+- **Packaging**: `packaging/arch/PKGBUILD` and a `release` workflow that
+  builds the Arch package in an `archlinux` container (installs it and runs
+  `dc-cli help` as a smoke test) and publishes a GitHub pre-release on a
+  `v*` tag.
+
 ## UNVERIFIED (needs the owner, see `docs/LOCAL_VERIFY.md`)
 
 Nothing below has ever talked to Discord.

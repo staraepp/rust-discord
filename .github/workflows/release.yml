@@ -1,0 +1,74 @@
+name: release
+
+# Tag push (v*): build the Arch package and publish a GitHub pre-release.
+# Pull requests touching the packaging: build only, to prove it still works.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  arch-package:
+    name: build Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install build tools
+        run: pacman -Syu --noconfirm --needed rust git
+      - uses: actions/checkout@v4
+      - name: Check tag matches pkgver
+        if: github.ref_type == 'tag'
+        run: |
+          pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
+          test "v$pkgver" = "$GITHUB_REF_NAME"
+          grep -q "^version = \"$pkgver\"$" Cargo.toml
+      - name: Build with makepkg
+        run: |
+          # makepkg refuses to run as root. Build exactly this commit by
+          # pointing the PKGBUILD's git source at the checkout.
+          git config --system --add safe.directory '*'
+          useradd -m builder
+          install -d -o builder /build
+          sed "s|^source=.*|source=(\"\$pkgname::git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA\")|" \
+            packaging/arch/PKGBUILD > /build/PKGBUILD
+          chown builder /build/PKGBUILD
+          cd /build
+          sudo -u builder makepkg --noconfirm
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          dc-cli help
+          sha256sum ./*.pkg.tar.zst > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: |
+            /build/*.pkg.tar.zst
+            /build/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    name: publish GitHub release
+    if: github.ref_type == 'tag'
+    needs: arch-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: arch-package
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --prerelease \
+            --title "$GITHUB_REF_NAME (M0 protocol spike)" \
+            --notes-file packaging/RELEASE_NOTES.md

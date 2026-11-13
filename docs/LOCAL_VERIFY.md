@@ -42,6 +42,12 @@ env -u DC_TOKEN cargo run -q -p dc-cli -- guilds
 Expected: `error: DC_TOKEN is not set. ...` and exit code 1. No network
 request is made.
 
+### Arch Linux: installed package instead of `cargo run`
+
+If you installed the `dc-cli` package (release asset, or `makepkg -si` in
+`packaging/arch/`), replace `cargo run -q -p dc-cli --` with `dc-cli` in every
+command below, e.g. `dc-cli guilds`.
+
 ## 2. Set the token without leaving it in shell history
 
 Linux (bash/zsh) — prompts without echo, nothing lands in history:
