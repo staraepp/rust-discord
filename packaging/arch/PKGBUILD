@@ -1,0 +1,39 @@
+# Maintainer: staraepp
+#
+# Builds dc-cli from the tagged source. Install with:
+#   makepkg -si
+# The token is never part of the package; see docs/LOCAL_VERIFY.md.
+
+pkgname=dc-cli
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Headless dev tool for an unofficial native Discord client (M0 protocol spike)"
+arch=('x86_64')
+url="https://github.com/staraepp/rust-discord"
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'git')
+# ring ships C/asm objects that do not link with makepkg's LTO flags.
+options=('!lto' '!debug')
+source=("$pkgname::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p dc-cli
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 target/release/dc-cli "$pkgdir/usr/bin/dc-cli"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 docs/LOCAL_VERIFY.md "$pkgdir/usr/share/doc/$pkgname/LOCAL_VERIFY.md"
+}
