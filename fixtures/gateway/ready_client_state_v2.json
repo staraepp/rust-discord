@@ -1,0 +1,46 @@
+{
+  "t": "READY",
+  "s": 1,
+  "op": 0,
+  "d": {
+    "v": 9,
+    "user": {"id": "100000000000000001", "username": "fake_owner", "discriminator": "0", "global_name": null, "avatar": null},
+    "session_id": "fakesession0000000000000000000002",
+    "session_type": "normal",
+    "resume_gateway_url": "wss://gateway-resume.example.invalid",
+    "users": [
+      {"id": "100000000000000002", "username": "fake_friend", "discriminator": "0", "global_name": "Fake Friend", "avatar": null}
+    ],
+    "merged_members": [[]],
+    "read_state": {"version": 1, "partial": false, "entries": []},
+    "user_guild_settings": {"version": 1, "partial": false, "entries": []},
+    "guilds": [
+      {
+        "id": "200000000000000001",
+        "data_mode": "full",
+        "joined_at": "2024-01-01T00:00:00.000000+00:00",
+        "large": false,
+        "member_count": 4,
+        "premium_subscription_count": 0,
+        "version": 1700000000000,
+        "properties": {
+          "id": "200000000000000001",
+          "name": "Fake Friends Server",
+          "icon": null,
+          "owner_id": "100000000000000001",
+          "features": []
+        },
+        "roles": [],
+        "emojis": [],
+        "stickers": [],
+        "threads": [],
+        "channels": [
+          {"id": "300000000000000002", "type": 0, "name": "general", "position": 0}
+        ]
+      }
+    ],
+    "private_channels": [
+      {"id": "300000000000000101", "type": 1, "recipient_ids": ["100000000000000002"]}
+    ]
+  }
+}

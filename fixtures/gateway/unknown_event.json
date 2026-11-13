@@ -1,0 +1,6 @@
+{
+  "t": "SOME_EVENT_ADDED_LATER",
+  "s": 5,
+  "op": 0,
+  "d": {"whatever": true, "nested": {"list": [1, 2, 3]}}
+}

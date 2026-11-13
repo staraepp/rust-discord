@@ -1,0 +1,52 @@
+[
+  {
+    "id": "400000000000000003",
+    "channel_id": "300000000000000002",
+    "author": {"id": "100000000000000001", "username": "fake_owner", "discriminator": "0", "global_name": "Fake Owner", "avatar": null},
+    "content": "newest message",
+    "timestamp": "2026-01-02T03:06:00.000000+00:00",
+    "edited_timestamp": null,
+    "tts": false,
+    "mention_everyone": false,
+    "mentions": [],
+    "mention_roles": [],
+    "attachments": [],
+    "embeds": [],
+    "components": [],
+    "pinned": false,
+    "type": 0,
+    "flags": 0
+  },
+  {
+    "id": "400000000000000002",
+    "channel_id": "300000000000000002",
+    "author": {"id": "100000000000000002", "username": "fake_friend", "discriminator": "0", "global_name": "Fake Friend", "avatar": null},
+    "content": "hello from a fixture",
+    "timestamp": "2026-01-02T03:04:05.678000+00:00",
+    "edited_timestamp": "2026-01-02T03:05:00.000000+00:00",
+    "tts": false,
+    "mention_everyone": false,
+    "mentions": [],
+    "mention_roles": [],
+    "attachments": [],
+    "embeds": [],
+    "components": [],
+    "pinned": false,
+    "type": 19,
+    "flags": 0,
+    "message_reference": {"type": 0, "channel_id": "300000000000000002", "message_id": "400000000000000001"},
+    "referenced_message": null
+  },
+  {
+    "id": "400000000000000001",
+    "channel_id": "300000000000000002",
+    "author": {"id": "600000000000000001", "username": "Fake Webhook", "discriminator": "0000", "avatar": null, "bot": true},
+    "webhook_id": "600000000000000001",
+    "content": "",
+    "timestamp": "2026-01-02T03:00:00.000000+00:00",
+    "edited_timestamp": null,
+    "attachments": [],
+    "embeds": [{"type": "rich", "description": "embed only"}],
+    "type": 0
+  }
+]
