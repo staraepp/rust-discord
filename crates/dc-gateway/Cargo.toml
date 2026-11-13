@@ -1,0 +1,29 @@
+[package]
+name = "dc-gateway"
+description = "Discord gateway client: sans-IO session state machine plus a driver over Transport/Clock traits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["ws"]
+# Real WebSocket transport (tokio-tungstenite + rustls) and the tokio clock.
+ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:fastrand", "tokio/time", "tokio/net"]
+
+[dependencies]
+dc-protocol.workspace = true
+fastrand = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "macros"] }
+tokio-tungstenite = { workspace = true, optional = true }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[lints]
+workspace = true
