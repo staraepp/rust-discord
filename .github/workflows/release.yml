@@ -1,10 +1,14 @@
 name: release
 
-# Tag push (v*): build the Arch package and publish a GitHub pre-release.
+# Publishing a release, either way builds the Arch package first:
+#   - push a `v*` tag, or
+#   - run this workflow manually on `main` ("Run workflow"); the release then
+#     creates the tag `v<pkgver>` itself.
 # Pull requests touching the packaging: build only, to prove it still works.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
   pull_request:
     paths:
       - "packaging/**"
@@ -18,16 +22,21 @@ jobs:
     name: build Arch package
     runs-on: ubuntu-latest
     container: archlinux:base-devel
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Install build tools
         run: pacman -Syu --noconfirm --needed rust git
       - uses: actions/checkout@v4
-      - name: Check tag matches pkgver
-        if: github.ref_type == 'tag'
+      - name: Check versions agree
+        id: version
         run: |
           pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
-          test "v$pkgver" = "$GITHUB_REF_NAME"
           grep -q "^version = \"$pkgver\"$" Cargo.toml
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            test "v$pkgver" = "$GITHUB_REF_NAME"
+          fi
+          echo "tag=v$pkgver" >> "$GITHUB_OUTPUT"
       - name: Build with makepkg
         run: |
           # makepkg refuses to run as root. Build exactly this commit by
@@ -53,7 +62,10 @@ jobs:
 
   publish:
     name: publish GitHub release
-    if: github.ref_type == 'tag'
+    # Manual runs may only release from main.
+    if: >-
+      github.ref_type == 'tag' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: arch-package
     runs-on: ubuntu-latest
     permissions:
@@ -67,8 +79,12 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.arch-package.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          # Creates the tag at this commit if it does not exist yet; fails if
+          # a release for it already exists (bump pkgver for a new one).
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
             --prerelease \
-            --title "$GITHUB_REF_NAME (M0 protocol spike)" \
+            --title "$TAG (M0 protocol spike)" \
             --notes-file packaging/RELEASE_NOTES.md
