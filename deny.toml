@@ -1,0 +1,44 @@
+# cargo-deny policy. See CLAUDE.md hard rule 4.
+# Anything not explicitly allowed below is denied -- that includes every
+# GPL / AGPL / LGPL variant. Do not add copyleft licenses here without the
+# owner's approval.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # AGPL-3.0-only (blueprint §8). Needs explicit owner approval.
+    { crate = "dave", reason = "AGPL-3.0-only; see CLAUDE.md rule 4" },
+    # Keep TLS on rustls; no OpenSSL linkage.
+    { crate = "openssl-sys", reason = "use rustls" },
+    { crate = "native-tls", reason = "use rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

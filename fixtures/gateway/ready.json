@@ -1,0 +1,152 @@
+{
+  "t": "READY",
+  "s": 1,
+  "op": 0,
+  "d": {
+    "_trace": ["[\"gateway-fake-0\",{\"micros\":0.0}]"],
+    "v": 9,
+    "user": {
+      "id": "100000000000000001",
+      "username": "fake_owner",
+      "discriminator": "0",
+      "global_name": "Fake Owner",
+      "avatar": null,
+      "avatar_decoration_data": null,
+      "bot": false,
+      "mfa_enabled": false,
+      "verified": true,
+      "email": "owner@example.invalid",
+      "premium_type": 0,
+      "flags": 0
+    },
+    "session_id": "fakesession0000000000000000000001",
+    "session_type": "normal",
+    "resume_gateway_url": "wss://gateway-resume.example.invalid",
+    "static_client_session_id": "00000000-0000-4000-8000-000000000001",
+    "auth_session_id_hash": "ZmFrZS1oYXNo",
+    "analytics_token": "fake-analytics-token",
+    "country_code": "ZZ",
+    "geo_ordered_rtc_regions": ["fake-region-1", "fake-region-2"],
+    "explicit_content_scan_version": 2,
+    "api_code_version": 1,
+    "friend_suggestion_count": 0,
+    "user_settings_proto": "",
+    "notification_settings": {"flags": 0},
+    "user_guild_settings": [],
+    "read_state": [],
+    "relationships": [],
+    "game_relationships": [],
+    "connected_accounts": [],
+    "presences": [],
+    "sessions": [],
+    "experiments": [],
+    "guild_experiments": [],
+    "guild_join_requests": [],
+    "linked_users": [],
+    "consents": {"personalization": {"consented": false}},
+    "tutorial": null,
+    "a_field_added_by_discord_next_week": {"anything": [1, 2, 3]},
+    "guilds": [
+      {
+        "id": "200000000000000001",
+        "name": "Fake Friends Server",
+        "icon": null,
+        "owner_id": "100000000000000001",
+        "joined_at": "2024-01-01T00:00:00.000000+00:00",
+        "large": false,
+        "member_count": 4,
+        "premium_subscription_count": 0,
+        "roles": [
+          {"id": "200000000000000001", "name": "@everyone", "permissions": "0", "position": 0}
+        ],
+        "emojis": [],
+        "stickers": [],
+        "members": [],
+        "presences": [],
+        "voice_states": [],
+        "stage_instances": [],
+        "guild_scheduled_events": [],
+        "threads": [
+          {
+            "id": "300000000000000010",
+            "type": 11,
+            "guild_id": "200000000000000001",
+            "parent_id": "300000000000000002",
+            "name": "fake thread",
+            "owner_id": "100000000000000001",
+            "thread_metadata": {"archived": false, "auto_archive_duration": 1440, "locked": false}
+          }
+        ],
+        "channels": [
+          {
+            "id": "300000000000000001",
+            "type": 4,
+            "name": "Text Channels",
+            "position": 0,
+            "permission_overwrites": []
+          },
+          {
+            "id": "300000000000000002",
+            "type": 0,
+            "name": "general",
+            "topic": "fake topic",
+            "position": 0,
+            "parent_id": "300000000000000001",
+            "last_message_id": "400000000000000001",
+            "nsfw": false,
+            "rate_limit_per_user": 0,
+            "permission_overwrites": []
+          },
+          {
+            "id": "300000000000000003",
+            "type": 2,
+            "name": "Voice",
+            "position": 1,
+            "parent_id": null,
+            "bitrate": 64000,
+            "user_limit": 0,
+            "rtc_region": null
+          },
+          {
+            "id": "300000000000000004",
+            "type": 4242,
+            "name": "channel-type-from-the-future",
+            "position": 2
+          }
+        ]
+      },
+      {
+        "id": "200000000000000002",
+        "unavailable": true
+      }
+    ],
+    "private_channels": [
+      {
+        "id": "300000000000000101",
+        "type": 1,
+        "last_message_id": "400000000000000050",
+        "flags": 0,
+        "recipients": [
+          {
+            "id": "100000000000000002",
+            "username": "fake_friend",
+            "discriminator": "0",
+            "global_name": "Fake Friend",
+            "avatar": null
+          }
+        ]
+      },
+      {
+        "id": "300000000000000102",
+        "type": 3,
+        "name": null,
+        "icon": null,
+        "owner_id": "100000000000000001",
+        "recipients": [
+          {"id": "100000000000000002", "username": "fake_friend", "discriminator": "0", "global_name": "Fake Friend", "avatar": null},
+          {"id": "100000000000000003", "username": "other_fake", "discriminator": "0", "global_name": null, "avatar": null}
+        ]
+      }
+    ]
+  }
+}

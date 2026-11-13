@@ -1,0 +1,51 @@
+{
+  "t": "MESSAGE_CREATE",
+  "s": 2,
+  "op": 0,
+  "d": {
+    "id": "400000000000000002",
+    "channel_id": "300000000000000002",
+    "channel_type": 0,
+    "guild_id": "200000000000000001",
+    "author": {
+      "id": "100000000000000002",
+      "username": "fake_friend",
+      "discriminator": "0",
+      "global_name": "Fake Friend",
+      "avatar": null,
+      "public_flags": 0
+    },
+    "member": {
+      "nick": null,
+      "roles": [],
+      "joined_at": "2024-01-01T00:00:00.000000+00:00",
+      "deaf": false,
+      "mute": false
+    },
+    "content": "hello from a fixture",
+    "timestamp": "2026-01-02T03:04:05.678000+00:00",
+    "edited_timestamp": null,
+    "tts": false,
+    "mention_everyone": false,
+    "mentions": [],
+    "mention_roles": [],
+    "attachments": [
+      {
+        "id": "500000000000000001",
+        "filename": "fake.png",
+        "size": 1234,
+        "url": "https://cdn.example.invalid/attachments/fake.png",
+        "proxy_url": "https://media.example.invalid/attachments/fake.png",
+        "content_type": "image/png",
+        "width": 10,
+        "height": 10
+      }
+    ],
+    "embeds": [],
+    "components": [],
+    "pinned": false,
+    "type": 0,
+    "flags": 0,
+    "nonce": "400000000000000999"
+  }
+}
