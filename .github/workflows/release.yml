@@ -32,7 +32,7 @@ jobs:
         run: >-
           pacman -Syu --noconfirm --needed rust git
           libxcb libxkbcommon libxkbcommon-x11 wayland fontconfig freetype2
-          vulkan-icd-loader vulkan-swrast
+          vulkan-icd-loader vulkan-swrast alsa-lib opus cmake
       - uses: actions/checkout@v4
       - name: Check versions agree
         id: version
@@ -59,7 +59,8 @@ jobs:
           dc-cli help
           # The GUI cannot open a window here; check it starts far enough to
           # ask for the token.
-          dc-client 2>&1 | grep -q "DC_TOKEN is not set"
+          dc-client --help
+          dc-client --version
           sha256sum ./*.pkg.tar.zst > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:

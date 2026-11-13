@@ -102,7 +102,7 @@ Palette observed (dark theme): app background ~#1a1a1e, channel column
 ~rgba(88,101,242,0.3), unread red #f23f43, online #23a55a, idle #f0b232,
 dnd #f23f43.
 
-## Completed on branch `claude/affectionate-ramanujan-a2dkra`
+## Earlier checkpoint `10fb3ca` on this branch
 
 The unfinished view from `6b81c9f` now builds. The app and demo use
 `UiOptions`; the backend answers `FetchImage` with `get_cdn` bytes or
@@ -124,24 +124,32 @@ No account credentials or screenshots were used in this repair.
 COSMETICS, PROGRESS, LOCAL_VERIFY §8, and README are updated. The latest UI
 has **not been visually verified**. Do not confuse the earlier owner-verified
 connection/history screenshot with verification of this new layout/images.
-The composer remains a placeholder; settings and member lists are absent.
+At that earlier checkpoint the composer was a placeholder and settings/member
+lists were absent. The latest work below supersedes that state.
 
-Next features, explicitly ordered by the owner:
+## Latest owner request and continuation
 
-1. Message composer (sending).
-2. Emoji picker with FakeNitro-lite.
-3. Member list (needs guild subscriptions, opcode 37).
-4. Settings / cosmetics editor.
+The owner now asks to **build the whole app before asking them to test**.
+That supersedes the earlier instruction to pause for a window review. Follow
+`docs/BUILD_PLAN.md` for implemented features, remaining blueprint scope,
+and the exact approved/pending dependency lists.
 
-First have the owner inspect the window using LOCAL_VERIFY §8–§9. Keep
-secrets/screenshots out of the public repo, and ask before adding dependencies
-(including any timezone library).
+The current work adds the integrated text/settings/plugin features and audio/
+voice foundations listed there. Native input is adapted from GPUI’s
+Apache-2.0 example with its license retained. Serein was used as a protocol/
+architecture reference, without adopting its fingerprint-emulation transport.
+
+Do not call the app complete: calls/DAVE, capture/Go Live, Rich Presence,
+and broader plugin/text features remain. The pending media-dependency question
+must be answered before those unapproved libraries are added. Continue the
+remaining authorized work; never substitute fake working buttons for these
+features or request visual testing as a condition for continuing development.
 
 ## Build notes
 
 - GPUI 0.2.2 needs `libc = "=0.2.189"` (pinned in `dc-ui`) and
   `mio 1.2.4`; see PROGRESS A11.
 - Linux build deps: `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
-  libvulkan-dev libxcb1-dev libfontconfig-dev`.
+  libvulkan-dev libxcb1-dev libfontconfig-dev libasound2-dev libopus-dev cmake`.
 - Headless screenshots do not work in the cloud sandbox (Xvfb + lavapipe
   renders nothing); the window does start. Visual checks need the owner.

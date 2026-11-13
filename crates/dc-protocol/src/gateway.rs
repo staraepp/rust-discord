@@ -292,6 +292,11 @@ pub struct Resume {
 pub enum GatewaySend {
     /// Opcode 1 with the last received sequence number (`null` if none).
     Heartbeat(Option<u64>),
+    /// Subscribes only to the visible member-list page. No background enumeration.
+    GuildSubscription {
+        guild_id: crate::Snowflake,
+        channel: Option<(crate::Snowflake, usize)>,
+    },
     Identify(Box<Identify>),
     Resume(Resume),
 }
@@ -300,6 +305,7 @@ impl GatewaySend {
     pub fn opcode(&self) -> Opcode {
         match self {
             GatewaySend::Heartbeat(_) => Opcode::Heartbeat,
+            GatewaySend::GuildSubscription { .. } => Opcode::GuildSubscriptionsBulk,
             GatewaySend::Identify(_) => Opcode::Identify,
             GatewaySend::Resume(_) => Opcode::Resume,
         }
@@ -312,6 +318,15 @@ impl GatewaySend {
     pub fn to_json(&self) -> String {
         let d = match self {
             GatewaySend::Heartbeat(seq) => json!(seq),
+            GatewaySend::GuildSubscription { guild_id, channel } => {
+                let mut channels = serde_json::Map::new();
+                if let Some((id, offset)) = channel {
+                    channels.insert(id.to_string(), json!([[offset, offset + 99]]));
+                }
+                // ASSUMPTION: opcode 37's lazy-member subscription shape is
+                // observed in permissively licensed clients; verify live.
+                json!({"subscriptions": {guild_id.to_string(): {"typing":true,"activities":true,"threads":false,"member_updates":false,"members":[],"channels":channels,"thread_member_lists":[]}}})
+            }
             GatewaySend::Identify(identify) => json!(identify),
             GatewaySend::Resume(resume) => json!(resume),
         };

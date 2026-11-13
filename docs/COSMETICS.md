@@ -15,7 +15,20 @@ CDN images are downloaded publicly, without your token.
 
 No file means no cosmetics. A file with a mistake in it (unknown key, bad
 color, bad user ID) stops the app with an error that names the problem.
-Restart the app after editing.
+Restart the app after editing the file manually. The in-app editor applies
+changes immediately after a successful save.
+
+## In-app editor
+
+Use the settings button in the bottom-left user bar for your own profile.
+For another person, open their profile and choose **Customize this profile
+locally**. Edit the optional fields, then choose **Save profile**. Invalid
+colors are reported without replacing the old file; saves use an atomic
+same-directory replacement. Blank fields remove that override.
+
+Appearance settings separately control emoji image links, font size, and
+history caching. Use **Save appearance** to persist them in `settings.json`.
+The demo applies changes in memory only and never writes your configuration.
 
 ## Format
 
@@ -99,5 +112,8 @@ The demo never downloads CDN assets, so asset hashes do not load in demo mode.
 - Missing CDN images keep initials or the banner color. Local file loading
   and image scaling still need visual verification on your machine.
 - Nameplate colors come from the two profile colors; arbitrary nameplate
-  artwork and a settings editor are not implemented.
-- Custom emoji / stickers (FakeNitro-lite) are next after message sending.
+  artwork, frames and profile effects are not implemented. The settings
+  editor supports the fields listed above.
+- The emoji picker supports Unicode and server emoji. With image links
+  enabled, custom emoji are inserted as CDN links; Send is always explicit.
+  A sticker picker is not implemented.

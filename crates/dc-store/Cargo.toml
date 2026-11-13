@@ -9,8 +9,9 @@ publish.workspace = true
 
 [dependencies]
 dc-protocol.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
 
-[dev-dependencies]
 serde_json.workspace = true
 
 [lints]

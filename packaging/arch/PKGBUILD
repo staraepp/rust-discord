@@ -13,8 +13,9 @@ arch=('x86_64')
 url="https://github.com/staraepp/rust-discord"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'wayland'
-         'fontconfig' 'freetype2' 'vulkan-icd-loader' 'vulkan-driver')
-makedepends=('cargo' 'git')
+         'fontconfig' 'freetype2' 'vulkan-icd-loader' 'vulkan-driver'
+         'alsa-lib' 'opus')
+makedepends=('cargo' 'git' 'cmake')
 replaces=('dc-cli')
 conflicts=('dc-cli')
 # ring ships C/asm objects that do not link with makepkg's LTO flags.
@@ -33,13 +34,17 @@ build() {
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release -p dc-app -p dc-cli
+  cargo run --frozen -p xtask -- licenses target/THIRD_PARTY_LICENSES.txt
 }
 
 package() {
   cd "$pkgname"
   install -Dm755 target/release/dc-client "$pkgdir/usr/bin/dc-client"
   install -Dm755 target/release/dc-cli "$pkgdir/usr/bin/dc-cli"
+  install -Dm644 target/THIRD_PARTY_LICENSES.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_LICENSES.txt"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 docs/LOCAL_VERIFY.md "$pkgdir/usr/share/doc/$pkgname/LOCAL_VERIFY.md"
   install -Dm644 docs/COSMETICS.md "$pkgdir/usr/share/doc/$pkgname/COSMETICS.md"
+  install -Dm644 docs/THIRD_PARTY.md "$pkgdir/usr/share/doc/$pkgname/THIRD_PARTY.md"
+  install -Dm644 licenses/GPUI-APACHE-2.0.txt "$pkgdir/usr/share/licenses/$pkgname/GPUI-APACHE-2.0.txt"
 }

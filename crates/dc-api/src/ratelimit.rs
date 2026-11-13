@@ -59,6 +59,22 @@ impl Route {
         }
     }
 
+    pub fn create_message(channel_id: Snowflake) -> Self {
+        Self {
+            method: Method::Post,
+            ..Self::channel_messages(channel_id)
+        }
+    }
+
+    pub fn message(channel_id: Snowflake, message_id: Snowflake, method: Method) -> Self {
+        Self {
+            method,
+            template: "/channels/{channel.id}/messages/{message.id}",
+            major: Some(channel_id),
+            path: format!("/channels/{channel_id}/messages/{message_id}"),
+        }
+    }
+
     fn template_key(&self) -> String {
         format!("{} {}", self.method.as_str(), self.template)
     }

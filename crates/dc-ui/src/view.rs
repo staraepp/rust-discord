@@ -16,14 +16,16 @@ use dc_store::{Change, Store};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
-    AnyElement, App, Application, Bounds, ClickEvent, Context, FontWeight, Hsla, Image,
-    ImageFormat, ImageSource, ObjectFit, Rgba, ScrollHandle, SharedString, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, div, img, linear_color_stop, linear_gradient, prelude::*, px, rgb,
-    rgba, size,
+    AnyElement, App, Application, Bounds, ClickEvent, Context, Entity, Focusable, FontWeight, Hsla,
+    Image, ImageFormat, ImageSource, ObjectFit, Rgba, ScrollHandle, SharedString, TitlebarOptions,
+    Window, WindowBounds, WindowOptions, div, img, linear_color_stop, linear_gradient, prelude::*,
+    px, rgb, rgba, size,
 };
 
+use crate::input::{InputEvent, TextInput};
 use crate::model::{self, ImageRef, MessageRow, ProfileView, RailItem, RowKind, Scope, SidebarRow};
 use crate::{BackendEvent, UiCommand};
+use dc_core::composer::Composer;
 
 // Dark palette, picked by eye to sit close to the reference screenshots.
 const BG_RAIL: u32 = 0x121214;
@@ -47,6 +49,7 @@ const WINDOW_TITLE: &str = "dc-client";
 #[derive(Clone, Debug, Default)]
 pub struct UiOptions {
     pub overlay: LocalOverlay,
+    pub preferences: dc_core::preferences::Preferences,
     /// Local time zone offset, used for message times.
     pub utc_offset_minutes: i32,
 }
@@ -95,11 +98,36 @@ enum Remote {
     Failed,
 }
 
+struct SettingsForm {
+    target: Option<Snowflake>,
+    fields: Vec<(&'static str, Entity<TextInput>)>,
+    error: Option<String>,
+    saving: bool,
+}
+
 pub struct ChatView {
     store: Store,
+    editor: Entity<TextInput>,
+    composer: Composer,
+    attachments: HashMap<Snowflake, Vec<PathBuf>>,
+    show_members: bool,
+    member_offset: usize,
     overlay: LocalOverlay,
+    preferences: dc_core::preferences::Preferences,
+    settings: Option<SettingsForm>,
+    editing: Option<(Snowflake, Snowflake)>,
+    edit_input: Entity<TextInput>,
+    delete_confirm: Option<(Snowflake, Snowflake)>,
+    dialog_pending: bool,
+    history_loading: bool,
+    history_end: HashSet<Snowflake>,
+    plugins: Vec<dc_core::plugin::PluginInfo>,
+    picker_open: bool,
+    emoji_search: Entity<TextInput>,
     utc_offset_minutes: i32,
     scope: Scope,
+    last_selected: HashMap<Scope, Snowflake>,
+    search: Entity<TextInput>,
     selected: Option<Snowflake>,
     /// User whose profile popup is open.
     popup: Option<Snowflake>,
@@ -127,7 +155,7 @@ impl ChatView {
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 let alive = this.update(cx, |view, cx| {
-                    view.apply(event);
+                    view.apply(event, cx);
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -137,11 +165,49 @@ impl ChatView {
         })
         .detach();
 
+        let search = cx.new(|cx| TextInput::new("Search loaded messages", cx));
+        cx.subscribe(&search, |_, _, _, cx| cx.notify()).detach();
+        let edit_input = cx.new(|cx| TextInput::new("Edit message", cx));
+        let emoji_search = cx.new(|cx| TextInput::new("Search emoji…", cx));
+        cx.subscribe(&emoji_search, |_, _, _, cx| cx.notify())
+            .detach();
+        let editor = cx.new(|cx| TextInput::new("Select a channel", cx));
+        cx.subscribe(&editor, |view, editor, event, cx| {
+            match event {
+                InputEvent::Changed => {
+                    if let Some(channel) = view.selected {
+                        view.composer
+                            .edit(channel, editor.read(cx).value().to_owned());
+                    }
+                }
+                InputEvent::Submit => view.submit(cx),
+            }
+            cx.notify();
+        })
+        .detach();
         ChatView {
+            editor,
+            composer: Composer::default(),
+            attachments: HashMap::new(),
+            show_members: true,
+            member_offset: 0,
             store: Store::new(),
             overlay: options.overlay,
+            preferences: options.preferences,
+            settings: None,
+            editing: None,
+            edit_input,
+            delete_confirm: None,
+            dialog_pending: false,
+            history_loading: false,
+            history_end: HashSet::new(),
+            plugins: Vec::new(),
+            picker_open: false,
+            emoji_search,
             utc_offset_minutes: options.utc_offset_minutes,
             scope: Scope::Home,
+            last_selected: HashMap::new(),
+            search,
             selected: None,
             popup: None,
             status: "Connecting…".into(),
@@ -161,19 +227,110 @@ impl ChatView {
     // State
     // ----------------------------------------------------------------------
 
-    fn apply(&mut self, event: BackendEvent) {
+    fn apply(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
         match event {
+            BackendEvent::OlderHistory {
+                channel_id,
+                messages,
+            } => {
+                self.history_loading = false;
+                if messages.len() < 50 {
+                    self.history_end.insert(channel_id);
+                }
+                self.store.insert_history(channel_id, messages);
+                if self.selected == Some(channel_id) {
+                    self.rows = model::messages(
+                        &self.store,
+                        &self.overlay,
+                        channel_id,
+                        self.utc_offset_minutes,
+                    );
+                }
+            }
+            BackendEvent::MessageChanged(message) => {
+                self.dialog_pending = false;
+                let channel_id = message.channel_id;
+                self.store.insert_history(channel_id, vec![*message]);
+                self.editing = None;
+                self.refresh(Change::Messages(channel_id), cx);
+            }
+            BackendEvent::MessageRemoved {
+                channel_id,
+                message_id,
+            } => {
+                self.store
+                    .apply(&dc_protocol::gateway::DispatchEvent::MessageDelete(
+                        dc_protocol::model::MessageDelete {
+                            id: message_id,
+                            channel_id,
+                            guild_id: None,
+                        },
+                    ));
+                self.delete_confirm = None;
+                self.dialog_pending = false;
+                self.refresh(Change::Messages(channel_id), cx);
+            }
+            BackendEvent::OperationFailed(error) => {
+                self.dialog_pending = false;
+                self.history_loading = false;
+                self.status = error.into();
+            }
+
+            BackendEvent::Plugins(plugins) => self.plugins = plugins,
+            BackendEvent::OverlaySaved { json, error } => {
+                if let Some(form) = self.settings.as_mut() {
+                    form.saving = false;
+                    form.error = error.clone();
+                }
+                if error.is_none()
+                    && let Ok(overlay) = LocalOverlay::from_json(&json)
+                {
+                    self.overlay = overlay;
+                    self.refresh_tree();
+                    self.refresh_messages();
+                    self.settings = None;
+                    self.status = "Cosmetics saved".into();
+                }
+            }
+            BackendEvent::PreferencesSaved { error } => {
+                self.status = error.unwrap_or_else(|| "Settings saved".into()).into()
+            }
+            BackendEvent::Sent {
+                channel_id,
+                nonce,
+                message,
+            } => {
+                self.store.insert_history(channel_id, vec![*message]);
+                if self.composer.complete(channel_id, &nonce, None) {
+                    self.attachments.remove(&channel_id);
+                }
+                if self.selected == Some(channel_id) {
+                    self.sync_editor(cx);
+                    self.refresh_messages();
+                    self.scroll.scroll_to_bottom();
+                }
+            }
+            BackendEvent::SendFailed {
+                channel_id,
+                nonce,
+                error,
+            } => {
+                self.composer.complete(channel_id, &nonce, Some(error));
+                if self.selected == Some(channel_id) {
+                    self.sync_editor(cx);
+                }
+            }
             BackendEvent::Status(status) => self.status = status.into(),
             BackendEvent::History {
                 channel_id,
                 messages,
             } => {
                 self.store.insert_history(channel_id, messages);
-                self.refresh(Change::Messages(channel_id));
+                self.refresh(Change::Messages(channel_id), cx);
             }
             BackendEvent::Dispatch(event) => {
                 let change = self.store.apply(&event);
-                self.refresh(change);
+                self.refresh(change, cx);
             }
             BackendEvent::Image { url, bytes } => {
                 let image = Arc::new(Image::from_bytes(sniff_format(&bytes), bytes));
@@ -185,7 +342,7 @@ impl ChatView {
         }
     }
 
-    fn refresh(&mut self, change: Change) {
+    fn refresh(&mut self, change: Change, cx: &mut Context<Self>) {
         match change {
             Change::None => {}
             Change::All => {
@@ -193,10 +350,20 @@ impl ChatView {
                 self.requested.clear();
                 self.refresh_tree();
                 if let Some(channel_id) = self.selected {
-                    self.select(channel_id);
+                    self.select(channel_id, cx);
                 }
             }
-            Change::Guilds => self.refresh_tree(),
+            Change::Guilds => {
+                if self
+                    .selected
+                    .is_some_and(|id| self.store.channel(id).is_none())
+                {
+                    self.selected = None;
+                    self.rows.clear();
+                    self.sync_editor(cx);
+                }
+                self.refresh_tree();
+            }
             Change::Messages(channel_id) => {
                 if self.selected == Some(channel_id) {
                     self.refresh_messages();
@@ -213,6 +380,8 @@ impl ChatView {
     }
 
     fn refresh_messages(&mut self) {
+        let follow =
+            self.rows.is_empty() || self.scroll.bottom_item() + 1 >= self.scroll.children_count();
         self.rows = match self.selected {
             Some(channel_id) => model::messages(
                 &self.store,
@@ -222,21 +391,134 @@ impl ChatView {
             ),
             None => Vec::new(),
         };
-        self.scroll.scroll_to_bottom();
+        if follow {
+            self.scroll.scroll_to_bottom();
+        }
     }
 
-    fn set_scope(&mut self, scope: Scope) {
+    fn set_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
+        if self.scope == scope {
+            return;
+        }
+        if let Some(id) = self.selected {
+            self.last_selected.insert(self.scope, id);
+        }
         self.scope = scope;
         self.sidebar = model::sidebar(&self.store, &self.overlay, scope);
+        self.selected = None;
+        self.rows.clear();
+        self.popup = None;
+        self.search.update(cx, |input, cx| input.set_value("", cx));
+        if let Some(id) = self
+            .last_selected
+            .get(&scope)
+            .copied()
+            .filter(|id| self.store.channel(*id).is_some())
+        {
+            self.select(id, cx);
+        } else {
+            self.title = "Select a channel".into();
+            self.sync_editor(cx);
+        }
     }
 
-    fn select(&mut self, channel_id: Snowflake) {
+    fn select(&mut self, channel_id: Snowflake, cx: &mut Context<Self>) {
         self.selected = Some(channel_id);
         self.title = model::channel_title(&self.store, &self.overlay, self.selected).into();
+        self.member_offset = 0;
+        self.history_loading = false;
+        if let Some(guild) = self.store.channel(channel_id).and_then(|c| c.guild_id) {
+            self.store.clear_member_list(guild);
+            (self.on_command)(UiCommand::SubscribeMembers {
+                guild_id: guild,
+                channel_id,
+                offset: 0,
+            });
+        }
+        self.sync_editor(cx);
+        self.title = model::channel_title(&self.store, &self.overlay, self.selected).into();
         self.refresh_messages();
+        self.scroll.scroll_to_bottom();
         if self.requested.insert(channel_id) {
             (self.on_command)(UiCommand::LoadHistory(channel_id));
         }
+    }
+
+    fn choose_files(&mut self, cx: &mut Context<Self>) {
+        let Some(channel) = self.selected else {
+            return;
+        };
+        if self.composer.draft(channel).pending {
+            return;
+        }
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach files".into()),
+        });
+        cx.spawn(async move |view, cx| {
+            let result = paths.await;
+            let _ = view.update(cx, |view, cx| {
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        let files = view.attachments.entry(channel).or_default();
+                        for path in paths {
+                            if files.len() < 10 && !files.contains(&path) {
+                                files.push(path);
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    _ => view.status = "Could not open the native file picker".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn sync_editor(&mut self, cx: &mut Context<Self>) {
+        let draft = self
+            .selected
+            .map(|id| self.composer.draft(id))
+            .unwrap_or_default();
+        let disabled = self.selected.is_none() || draft.pending;
+        let placeholder = match self.selected {
+            Some(_) => format!("Message {}", self.title),
+            None => "Select a channel".into(),
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.set_value(draft.content, cx);
+            editor.set_placeholder(placeholder, cx);
+            editor.disabled = disabled;
+        });
+    }
+
+    fn submit(&mut self, cx: &mut Context<Self>) {
+        let Some(channel) = self.selected else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let attachments = self.attachments.get(&channel).cloned().unwrap_or_default();
+        match self
+            .composer
+            .submit_with_files(channel, now, !attachments.is_empty())
+        {
+            Ok(message) => {
+                (self.on_command)(UiCommand::SendMessage {
+                    channel_id: channel,
+                    message,
+                    attachments,
+                });
+                self.sync_editor(cx);
+            }
+            Err(error) => self.status = error.to_owned().into(),
+        }
+        cx.notify();
     }
 
     /// The other user of the selected one-to-one DM, if that is what is open.
@@ -382,7 +664,7 @@ impl ChatView {
                             .child(face),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.set_scope(Scope::Guild(guild_id));
+                        view.set_scope(Scope::Guild(guild_id), cx);
                         cx.notify();
                     }))
                     .into_any_element(),
@@ -417,7 +699,7 @@ impl ChatView {
                     .font_weight(FontWeight::BOLD)
                     .child("DM")
                     .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                        view.set_scope(Scope::Home);
+                        view.set_scope(Scope::Home, cx);
                         cx.notify();
                     })),
             )
@@ -520,7 +802,7 @@ impl ChatView {
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         if let Some(channel_id) = channel_id {
-                            view.select(channel_id);
+                            view.select(channel_id, cx);
                             cx.notify();
                         }
                     }))
@@ -594,6 +876,19 @@ impl ChatView {
                             .child(SharedString::from(own.username)),
                     ),
             )
+            .child(
+                div()
+                    .id("open-settings")
+                    .ml_auto()
+                    .px_2()
+                    .cursor_pointer()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("⚙")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.open_settings(None, cx);
+                        cx.notify();
+                    })),
+            )
     }
 
     fn render_channel_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -658,6 +953,83 @@ impl ChatView {
         row: &MessageRow,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let Some(channel_id) = self.selected else {
+            return div().into_any_element();
+        };
+        let message_id = row.id;
+        let own = self
+            .store
+            .current_user()
+            .is_some_and(|u| u.id == row.author_id);
+        let content = row.content.clone();
+        let actions = div()
+            .flex()
+            .justify_end()
+            .gap_3()
+            .text_xs()
+            .text_color(rgb(TEXT_MUTED))
+            .child(
+                div()
+                    .id(("copy-message", index))
+                    .cursor_pointer()
+                    .child("Copy")
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if let Some(message) = view
+                            .store
+                            .messages(channel_id)
+                            .iter()
+                            .find(|m| m.id == message_id)
+                        {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                message.content.clone(),
+                            ));
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .id(("reply-message", index))
+                    .cursor_pointer()
+                    .child("Reply")
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.composer.reply(channel_id, Some(message_id));
+                        cx.notify();
+                    })),
+            )
+            .when(own, |actions| {
+                actions
+                    .child(
+                        div()
+                            .id(("edit-message", index))
+                            .cursor_pointer()
+                            .child("Edit")
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                let content = view
+                                    .store
+                                    .messages(channel_id)
+                                    .iter()
+                                    .find(|m| m.id == message_id)
+                                    .map(|m| m.content.clone())
+                                    .unwrap_or_else(|| content.clone());
+                                view.edit_input
+                                    .update(cx, |input, cx| input.set_value(content, cx));
+                                view.editing = Some((channel_id, message_id));
+                                window.focus(&view.edit_input.read(cx).focus_handle(cx));
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("delete-message", index))
+                            .cursor_pointer()
+                            .text_color(rgb(0xf38b8e))
+                            .child("Delete")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.delete_confirm = Some((channel_id, message_id));
+                                cx.notify();
+                            })),
+                    )
+            });
         let author_id = row.author_id;
         let open_profile =
             move |view: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
@@ -668,9 +1040,61 @@ impl ChatView {
         if row.edited {
             body.push_str(" (edited)");
         }
+        let rich = dc_core::markdown::parse(&body);
+        let styled = gpui::StyledText::new(SharedString::from(rich.text.clone())).with_highlights(
+            rich.spans.iter().map(|span| {
+                let mut style = gpui::HighlightStyle::default();
+                if span.style.bold {
+                    style.font_weight = Some(FontWeight::BOLD);
+                }
+                if span.style.italic {
+                    style.font_style = Some(gpui::FontStyle::Italic);
+                }
+                if span.style.code {
+                    style.background_color = Some(rgb(BG_CARD).into());
+                    style.color = Some(rgb(0xe3b8d0).into());
+                }
+                if span.style.strike {
+                    style.strikethrough = Some(gpui::StrikethroughStyle {
+                        thickness: px(1.),
+                        color: None,
+                    });
+                }
+                (span.range.clone(), style)
+            }),
+        );
+        let images: Vec<AnyElement> = row
+            .images
+            .iter()
+            .filter_map(|image| self.image(image))
+            .map(|source| {
+                div()
+                    .mt_2()
+                    .max_w_full()
+                    .child(
+                        img(source)
+                            .max_w(px(360.))
+                            .max_h(px(240.))
+                            .object_fit(ObjectFit::Contain),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let links = rich.links.clone();
         let text = div()
             .text_color(rgb(TEXT))
-            .when(!body.is_empty(), |t| t.child(SharedString::from(body)))
+            .when(!body.is_empty(), |t| {
+                t.child(
+                    gpui::InteractiveText::new(("message-text", index), styled).on_click(
+                        links.iter().map(|(r, _)| r.clone()).collect(),
+                        move |index, _, cx| {
+                            if let Some((_, url)) = links.get(index) {
+                                cx.open_url(url);
+                            }
+                        },
+                    ),
+                )
+            })
             .children(row.attachments.iter().map(|name| {
                 div()
                     .mt_1()
@@ -680,7 +1104,8 @@ impl ChatView {
                     .bg(rgb(BG_CARD))
                     .text_color(rgb(TEXT_MUTED))
                     .child(SharedString::from(format!("📎 {name}")))
-            }));
+            }))
+            .children(images);
 
         if !row.show_header {
             return div()
@@ -690,10 +1115,12 @@ impl ChatView {
                 .py(px(2.))
                 .hover(|style| style.bg(rgb(BG_HOVER)))
                 .child(text)
+                .child(actions)
                 .into_any_element();
         }
 
         let avatar = self.avatar(&row.avatar, &row.author, 40.);
+        let message_id = row.id;
         div()
             .id(("msg", index))
             .flex()
@@ -767,6 +1194,20 @@ impl ChatView {
                                             .child(SharedString::from(row.author.clone()))
                                             .on_click(cx.listener(open_profile)),
                                     )
+                                    .child(
+                                        div()
+                                            .id(("reply", index))
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT_MUTED))
+                                            .child("Reply")
+                                            .on_click(cx.listener(move |view, _, _, cx| {
+                                                if let Some(channel) = view.selected {
+                                                    view.composer.reply(channel, Some(message_id));
+                                                    cx.notify();
+                                                }
+                                            })),
+                                    )
                                     .when(row.is_bot, |line| {
                                         line.child(
                                             div()
@@ -788,11 +1229,12 @@ impl ChatView {
                             .child(text),
                     ),
             )
+            .child(actions)
             .into_any_element()
     }
 
     fn render_message_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let rows = self.rows.clone();
+        let rows = model::filter_messages(&self.rows, self.search.read(cx).value());
         let mut messages: Vec<AnyElement> = Vec::with_capacity(rows.len());
         for (index, row) in rows.iter().enumerate() {
             messages.push(self.render_message(index, row, cx));
@@ -804,10 +1246,12 @@ impl ChatView {
         } else {
             None
         };
-        let placeholder = match self.selected {
-            Some(_) => format!("Message {} — sending is not built yet", self.title),
-            None => "Select a channel".to_owned(),
-        };
+        let draft = self
+            .selected
+            .map(|id| self.composer.draft(id))
+            .unwrap_or_default();
+        let can_send =
+            self.selected.is_some() && !draft.pending && !draft.content.trim().is_empty();
 
         div()
             .flex()
@@ -828,7 +1272,43 @@ impl ChatView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(TEXT_STRONG))
                     .truncate()
-                    .child(self.title.clone()),
+                    .child(self.title.clone())
+                    .child(
+                        div()
+                            .id("jump-latest")
+                            .px_2()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(rgb(TEXT_MUTED))
+                            .child("Latest")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.scroll.scroll_to_bottom();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .ml_auto()
+                            .w(px(220.))
+                            .p_1()
+                            .rounded_md()
+                            .bg(rgb(BG_INPUT))
+                            .child(self.search.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("toggle-members")
+                            .ml_auto()
+                            .px_2()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(rgb(TEXT_MUTED))
+                            .child("Members")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.show_members = !view.show_members;
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -843,22 +1323,167 @@ impl ChatView {
                     .when_some(hint, |list, hint| {
                         list.child(div().p_4().text_color(rgb(TEXT_MUTED)).child(hint))
                     })
+                    .child(
+                        div()
+                            .id("load-older")
+                            .px_4()
+                            .py_2()
+                            .text_xs()
+                            .text_color(rgb(TEXT_MUTED))
+                            .cursor_pointer()
+                            .child(if self.history_loading {
+                                "Loading older messages…"
+                            } else {
+                                "Load older messages"
+                            })
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if view.history_loading {
+                                    return;
+                                }
+                                if let Some(channel_id) = view.selected
+                                    && !view.history_end.contains(&channel_id)
+                                    && view.store.messages(channel_id).len() < 500
+                                    && let Some(before) =
+                                        view.store.messages(channel_id).first().map(|m| m.id)
+                                {
+                                    view.history_loading = true;
+                                    (view.on_command)(UiCommand::LoadOlder { channel_id, before });
+                                    cx.notify();
+                                }
+                            })),
+                    )
                     .children(messages),
+            )
+            .children(
+                self.selected
+                    .and_then(|id| self.attachments.get(&id))
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, path)| {
+                        div()
+                            .id(("pending-file", index))
+                            .mx_4()
+                            .text_xs()
+                            .text_color(rgb(TEXT_MUTED))
+                            .cursor_pointer()
+                            .child(SharedString::from(format!(
+                                "📎 {} · click to remove",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            )))
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if let Some(channel) = view.selected
+                                    && !view.composer.draft(channel).pending
+                                    && let Some(files) = view.attachments.get_mut(&channel)
+                                    && index < files.len()
+                                {
+                                    files.remove(index);
+                                    cx.notify();
+                                }
+                            }))
+                            .into_any_element()
+                    }),
+            )
+            .when_some(draft.error.clone(), |pane, error| {
+                pane.child(
+                    div()
+                        .mx_4()
+                        .mb_1()
+                        .text_xs()
+                        .text_color(rgb(0xf38b8e))
+                        .child(SharedString::from(format!(
+                            "Not sent: {error}. Your draft is preserved; use Send to retry."
+                        ))),
+                )
+            })
+            .when_some(draft.reply, |pane, id| {
+                pane.child(
+                    div()
+                        .mx_4()
+                        .mb_1()
+                        .flex()
+                        .justify_between()
+                        .text_xs()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(format!("Replying to message {id}")))
+                        .child(
+                            div()
+                                .id("cancel-reply")
+                                .cursor_pointer()
+                                .child("Cancel")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    if let Some(channel) = view.selected {
+                                        view.composer.reply(channel, None);
+                                        cx.notify();
+                                    }
+                                })),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .mx_4()
+                    .mb_1()
+                    .p_2()
+                    .flex()
+                    .items_end()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(rgb(BG_INPUT))
+                    .child(
+                        div()
+                            .id("attach-files")
+                            .px_2()
+                            .py_2()
+                            .cursor_pointer()
+                            .child("+")
+                            .on_click(cx.listener(|view, _, _, cx| view.choose_files(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("open-emoji")
+                            .px_2()
+                            .py_2()
+                            .cursor_pointer()
+                            .child("☺")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.picker_open = !view.picker_open;
+                                if view.picker_open {
+                                    window.focus(&view.emoji_search.read(cx).focus_handle(cx));
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().flex_1().min_w(px(0.)).child(self.editor.clone()))
+                    .child(
+                        div()
+                            .id("send-message")
+                            .flex_none()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(if can_send { ACCENT } else { BG_SELECTED }))
+                            .text_color(rgb(TEXT_STRONG))
+                            .when(can_send, |b| b.cursor_pointer())
+                            .child(if draft.pending { "Sending…" } else { "Send" })
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.submit(cx);
+                            })),
+                    ),
             )
             .child(
                 div()
                     .flex_none()
                     .mx_4()
-                    .mb_2()
-                    .h(px(44.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .rounded_lg()
-                    .bg(rgb(BG_INPUT))
+                    .mb_1()
+                    .text_xs()
                     .text_color(rgb(TEXT_MUTED))
-                    .truncate()
-                    .child(SharedString::from(placeholder)),
+                    .child(SharedString::from(format!(
+                        "Enter to send · Shift+Enter for a new line · {}/2000",
+                        draft.content.encode_utf16().count()
+                    ))),
             )
             .child(
                 div()
@@ -873,7 +1498,12 @@ impl ChatView {
     }
 
     /// A profile card. `compact` is the popup; otherwise the side panel.
-    fn render_profile(&mut self, profile: &ProfileView, compact: bool) -> AnyElement {
+    fn render_profile(
+        &mut self,
+        profile: &ProfileView,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let card = profile.profile_color.map_or(BG_CARD, |c| c.0);
         let card_end = profile
             .banner_color
@@ -1003,13 +1633,781 @@ impl ChatView {
                         )
                     }),
             )
+            .child(
+                div()
+                    .id(("customize-profile", profile.user_id.get()))
+                    .mx_4()
+                    .mb_4()
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgba(0xffffff14))
+                    .cursor_pointer()
+                    .text_sm()
+                    .child("Customize this profile locally")
+                    .on_click(cx.listener({
+                        let user = profile.user_id;
+                        let own = profile.is_self;
+                        move |view, _, _, cx| {
+                            view.open_settings(if own { None } else { Some(user) }, cx);
+                            cx.notify();
+                        }
+                    })),
+            )
             .into_any_element()
     }
 
-    fn render_side_panel(&mut self) -> Option<AnyElement> {
+    fn open_settings(&mut self, target: Option<Snowflake>, cx: &mut Context<Self>) {
+        let current = match target {
+            Some(id) => self.overlay.users.get(&id).cloned().unwrap_or_default(),
+            None => self.overlay.me.clone(),
+        };
+        let value = serde_json::to_value(current).unwrap_or_default();
+        let fields = [
+            "display_name",
+            "name_color",
+            "accent_color",
+            "profile_color",
+            "bio",
+            "banner",
+            "avatar",
+            "avatar_decoration",
+        ]
+        .into_iter()
+        .map(|key| {
+            let text = value
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned();
+            let editor = cx.new(|cx| {
+                let mut input = TextInput::new(key, cx);
+                input.set_value(text, cx);
+                input
+            });
+            (key, editor)
+        })
+        .collect();
+        self.settings = Some(SettingsForm {
+            target,
+            fields,
+            error: None,
+            saving: false,
+        });
+        self.popup = None;
+    }
+    fn save_cosmetics(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.settings.as_mut() else {
+            return;
+        };
+        if form.saving {
+            return;
+        }
+        let mut value = serde_json::Map::new();
+        for (key, input) in &form.fields {
+            let text = input.read(cx).value();
+            if !text.is_empty() {
+                value.insert((*key).into(), serde_json::Value::String(text.to_owned()));
+            }
+        }
+        match serde_json::from_value::<dc_core::ProfileOverride>(serde_json::Value::Object(value)) {
+            Ok(profile) => {
+                let mut overlay = self.overlay.clone();
+                if let Some(id) = form.target {
+                    overlay.users.insert(id, profile);
+                } else {
+                    overlay.me = profile;
+                }
+                form.saving = true;
+                (self.on_command)(UiCommand::SaveOverlay(overlay.to_json()));
+            }
+            Err(error) => form.error = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+    fn render_settings(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let form = self.settings.as_ref()?;
+        let title = form
+            .target
+            .map(|id| format!("Local profile for {id}"))
+            .unwrap_or_else(|| "Your local profile".into());
+        let mut fields: Vec<AnyElement> = Vec::new();
+        for (key, input) in &form.fields {
+            fields.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_xs().text_color(rgb(TEXT_MUTED)).child(*key))
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_md()
+                            .bg(rgb(BG_INPUT))
+                            .child(input.clone()),
+                    )
+                    .into_any_element(),
+            );
+        }
+        fields.push(
+            div()
+                .id("clear-history-cache")
+                .p_2()
+                .rounded_md()
+                .bg(rgb(BG_INPUT))
+                .cursor_pointer()
+                .child("Erase local cached history (keeps Discord messages)")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    (view.on_command)(UiCommand::ClearHistoryCache);
+                    cx.notify();
+                }))
+                .into_any_element(),
+        );
+        for info in &self.plugins {
+            let id = info.manifest.id.clone();
+            let granted = self.preferences.plugin_permissions.contains_key(&id);
+            let label = format!(
+                "{} · {}",
+                info.manifest.name,
+                if granted {
+                    "Enabled: reads and changes submitted text"
+                } else {
+                    "Disabled: enable outgoing text transform"
+                }
+            );
+            fields.push(
+                div()
+                    .id(SharedString::from(format!("plugin-toggle-{id}")))
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(BG_INPUT))
+                    .cursor_pointer()
+                    .child(SharedString::from(label))
+                    .when_some(info.error.clone(), |row, error| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0xf38b8e))
+                                .child(SharedString::from(error)),
+                        )
+                    })
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if view.preferences.plugin_permissions.remove(&id).is_none() {
+                            view.preferences
+                                .plugin_permissions
+                                .insert(id.clone(), vec!["outgoing-transform".into()]);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        let error = form.error.clone();
+        let saving = form.saving;
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id("settings-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(rgba(0x00000099))
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if !view.settings.as_ref().is_some_and(|f| f.saving) {
+                                view.settings = None;
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id("settings-card")
+                        .relative()
+                        .occlude()
+                        .w(px(680.))
+                        .max_w_full()
+                        .max_h_full()
+                        .m_4()
+                        .rounded_lg()
+                        .bg(rgb(BG_CARD))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .p_4()
+                                .text_lg()
+                                .font_weight(FontWeight::BOLD)
+                                .child(SharedString::from(title)),
+                        )
+                        .child(
+                            div()
+                                .id("settings-fields")
+                                .min_h(px(0.))
+                                .overflow_y_scroll()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .children(fields)
+                                .child(
+                                    div()
+                                        .mt_3()
+                                        .text_xs()
+                                        .text_color(rgb(TEXT_MUTED))
+                                        .child("Appearance & behavior"),
+                                )
+                                .child(
+                                    div()
+                                        .id("toggle-fake-nitro")
+                                        .p_2()
+                                        .rounded_md()
+                                        .bg(rgb(BG_INPUT))
+                                        .cursor_pointer()
+                                        .child(SharedString::from(format!(
+                                            "Custom emoji as image links: {}",
+                                            if self.preferences.fake_nitro {
+                                                "On"
+                                            } else {
+                                                "Off"
+                                            }
+                                        )))
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.preferences.fake_nitro =
+                                                !view.preferences.fake_nitro;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("toggle-history-cache")
+                                        .p_2()
+                                        .rounded_md()
+                                        .bg(rgb(BG_INPUT))
+                                        .cursor_pointer()
+                                        .child(SharedString::from(format!(
+                                            "Save message history on this device: {}",
+                                            if self.preferences.cache_history {
+                                                "On"
+                                            } else {
+                                                "Off"
+                                            }
+                                        )))
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.preferences.cache_history =
+                                                !view.preferences.cache_history;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("font-smaller")
+                                                .cursor_pointer()
+                                                .child("A−")
+                                                .on_click(cx.listener(|view, _, _, cx| {
+                                                    view.preferences.font_size = view
+                                                        .preferences
+                                                        .font_size
+                                                        .saturating_sub(1)
+                                                        .max(11);
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(SharedString::from(format!(
+                                            "Text size: {}",
+                                            self.preferences.font_size
+                                        )))
+                                        .child(
+                                            div()
+                                                .id("font-larger")
+                                                .cursor_pointer()
+                                                .child("A+")
+                                                .on_click(cx.listener(|view, _, _, cx| {
+                                                    view.preferences.font_size =
+                                                        (view.preferences.font_size + 1).min(24);
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                                .when_some(error, |form, error| {
+                                    form.child(
+                                        div()
+                                            .text_color(rgb(0xf38b8e))
+                                            .child(SharedString::from(error)),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .p_4()
+                                .child(
+                                    div()
+                                        .id("save-cosmetics")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .bg(rgb(ACCENT))
+                                        .cursor_pointer()
+                                        .child(if saving { "Saving…" } else { "Save profile" })
+                                        .on_click(
+                                            cx.listener(|view, _, _, cx| view.save_cosmetics(cx)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("save-preferences")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .bg(rgb(BG_SELECTED))
+                                        .cursor_pointer()
+                                        .child("Save appearance")
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            (view.on_command)(UiCommand::SavePreferences(
+                                                view.preferences.clone(),
+                                            ));
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+    fn render_emoji_picker(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.picker_open {
+            return None;
+        }
+        let query = self.emoji_search.read(cx).value().to_lowercase();
+        let mut tiles = Vec::new();
+        for (index, (emoji, _name)) in dc_core::emoji::UNICODE
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, name))| name.contains(&query))
+        {
+            let text = (*emoji).to_owned();
+            tiles.push(
+                div()
+                    .id(("unicode-emoji", index))
+                    .size(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xl()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(BG_SELECTED)))
+                    .child(*emoji)
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.editor
+                            .update(cx, |editor, cx| editor.insert(&text, window, cx));
+                        window.focus(&view.editor.read(cx).focus_handle(cx));
+                        view.picker_open = false;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        let custom: Vec<_> = self
+            .store
+            .guilds()
+            .iter()
+            .flat_map(|guild| {
+                guild
+                    .emojis
+                    .iter()
+                    .map(move |emoji| (guild.id, emoji.clone()))
+            })
+            .filter(|(_, e)| e.available && e.name.to_lowercase().contains(&query))
+            .collect();
+        for (index, (_, emoji)) in custom.into_iter().enumerate() {
+            let source = self.image(&ImageRef::Remote(dc_core::emoji::url(
+                emoji.id,
+                emoji.animated,
+                64,
+            )));
+            let insertion = dc_core::emoji::insertion(
+                &emoji,
+                self.preferences.fake_nitro,
+                self.preferences.emoji_size,
+            );
+            let label = emoji.name;
+            tiles.push(
+                div()
+                    .id(("custom-emoji", index))
+                    .size(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(BG_SELECTED)))
+                    .when_some(source, |tile, source| {
+                        tile.child(img(source).size(px(32.)).object_fit(ObjectFit::Contain))
+                    })
+                    .child(SharedString::from(label))
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        let text = format!("{insertion} ");
+                        view.editor
+                            .update(cx, |editor, cx| editor.insert(&text, window, cx));
+                        window.focus(&view.editor.read(cx).focus_handle(cx));
+                        view.picker_open = false;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        Some(
+            div()
+                .id("emoji-picker")
+                .absolute()
+                .bottom(px(100.))
+                .right(px(16.))
+                .w(px(380.))
+                .h(px(420.))
+                .occlude()
+                .shadow_lg()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(BG_CARD))
+                .flex()
+                .flex_col()
+                .child(div().p_3().font_weight(FontWeight::BOLD).child("Emoji"))
+                .child(
+                    div()
+                        .mx_3()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(BG_INPUT))
+                        .child(self.emoji_search.clone()),
+                )
+                .child(
+                    div()
+                        .id("emoji-grid")
+                        .flex_1()
+                        .min_h(px(0.))
+                        .overflow_y_scroll()
+                        .p_3()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(tiles),
+                )
+                .child(div().p_3().text_xs().text_color(rgb(TEXT_MUTED)).child(
+                    if self.preferences.fake_nitro {
+                        "Custom emoji insert as image links · only sent when you press Send"
+                    } else {
+                        "Custom emoji use normal syntax · server permissions still apply"
+                    },
+                ))
+                .into_any_element(),
+        )
+    }
+    fn render_risk_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.preferences.risk_accepted {
+            return None;
+        }
+        Some(div().absolute().top_0().left_0().size_full().bg(rgba(0x000000dd)).flex().items_center().justify_center().occlude().child(div().w(px(520.)).max_w_full().m_4().p_5().rounded_lg().bg(rgb(BG_CARD)).flex().flex_col().gap_4().child(div().text_xl().font_weight(FontWeight::BOLD).child("Welcome to dc-client ✦")).child("This is an unofficial Discord client. Third-party clients violate Discord’s Terms of Service and can put your account at risk. Continue only if you accept that risk.").child("Cosmetics only change your view. Message history caching is off by default. The client does not collect telemetry.").child(div().id("accept-risk").p_3().rounded_md().bg(rgb(ACCENT)).cursor_pointer().child("I understand — continue").on_click(cx.listener(|view, _, _, cx| { view.preferences.risk_accepted=true; (view.on_command)(UiCommand::SavePreferences(view.preferences.clone())); cx.notify(); })))).into_any_element())
+    }
+
+    fn render_message_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let editing = self.editing;
+        let (channel_id, message_id) = editing.or(self.delete_confirm)?;
+        let edit = editing.is_some();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .bg(rgba(0x00000099))
+                .flex()
+                .items_center()
+                .justify_center()
+                .occlude()
+                .child(
+                    div()
+                        .w(px(560.))
+                        .max_w_full()
+                        .m_4()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(rgb(BG_CARD))
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(if edit {
+                            "Edit message"
+                        } else {
+                            "Delete this message? This removes it for everyone."
+                        })
+                        .when(edit, |card| {
+                            card.child(
+                                div()
+                                    .p_2()
+                                    .bg(rgb(BG_INPUT))
+                                    .rounded_md()
+                                    .child(self.edit_input.clone()),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .id("confirm-message-change")
+                                        .p_2()
+                                        .rounded_md()
+                                        .bg(rgb(if edit { ACCENT } else { 0xda373c }))
+                                        .cursor_pointer()
+                                        .child(if edit {
+                                            "Save changes"
+                                        } else {
+                                            "Delete message"
+                                        })
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            if view.dialog_pending {
+                                                return;
+                                            }
+                                            view.dialog_pending = true;
+                                            let command = if edit {
+                                                UiCommand::EditMessage {
+                                                    channel_id,
+                                                    message_id,
+                                                    content: view
+                                                        .edit_input
+                                                        .read(cx)
+                                                        .value()
+                                                        .to_owned(),
+                                                }
+                                            } else {
+                                                UiCommand::DeleteMessage {
+                                                    channel_id,
+                                                    message_id,
+                                                }
+                                            };
+                                            (view.on_command)(command);
+                                            view.status = "Updating message…".into();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("cancel-message-change")
+                                        .p_2()
+                                        .cursor_pointer()
+                                        .child("Cancel")
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.editing = None;
+                                            view.delete_confirm = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_members(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.show_members {
+            return None;
+        }
+        let guild_id = self.store.channel(self.selected?)?.guild_id?;
+        let guild = self.store.guild(guild_id)?.clone();
+        let list = self.store.member_list(guild_id).cloned();
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if let Some(list) = list {
+            for (index, item) in list
+                .slots
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, item)| item.map(|item| (i, item)))
+            {
+                if let Some(group) = item.group {
+                    let label = group
+                        .id
+                        .parse::<Snowflake>()
+                        .ok()
+                        .and_then(|id| guild.roles.iter().find(|r| r.id == id))
+                        .map(|r| r.name.clone())
+                        .unwrap_or(group.id);
+                    rows.push(
+                        div()
+                            .mt_4()
+                            .px_2()
+                            .text_xs()
+                            .text_color(rgb(TEXT_MUTED))
+                            .child(SharedString::from(format!(
+                                "{} — {}",
+                                label.to_uppercase(),
+                                group.count
+                            )))
+                            .into_any_element(),
+                    );
+                }
+                if let Some(member) = item.member {
+                    let profile = model::profile_of(&member.user, &self.store, &self.overlay);
+                    let color = profile.name_color.or_else(|| {
+                        guild
+                            .roles
+                            .iter()
+                            .filter(|role| member.roles.contains(&role.id) && role.color != 0)
+                            .max_by_key(|r| r.position)
+                            .map(|r| Color(r.color))
+                    });
+                    let user_id = member.user.id;
+                    let avatar = self.avatar(&profile.avatar, &profile.name, 32.);
+                    let status = item
+                        .presence
+                        .map(|p| p.status)
+                        .unwrap_or_else(|| "offline".into());
+                    let status_color = match status.as_str() {
+                        "online" => 0x23a55a,
+                        "idle" => 0xf0b232,
+                        "dnd" => 0xf23f43,
+                        _ => TEXT_MUTED,
+                    };
+                    rows.push(
+                        div()
+                            .id(("member", index))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .p_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(BG_HOVER)))
+                            .child(avatar)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .text_color(hex(color, TEXT))
+                                    .child(SharedString::from(profile.name))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(status_color))
+                                            .child(SharedString::from(status)),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.popup = Some(user_id);
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                }
+            }
+        }
+        if rows.is_empty() {
+            rows.push(
+                div()
+                    .p_3()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("Waiting for member data…")
+                    .into_any_element(),
+            );
+        }
+        let range = format!(
+            "Members {}–{}",
+            self.member_offset + 1,
+            self.member_offset + 100
+        );
+        Some(
+            div()
+                .id("members")
+                .flex_none()
+                .w(px(240.))
+                .h_full()
+                .flex()
+                .flex_col()
+                .bg(rgb(BG_COLUMN))
+                .child(
+                    div()
+                        .p_3()
+                        .text_xs()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(range)),
+                )
+                .child(
+                    div()
+                        .id("member-rows")
+                        .flex_1()
+                        .min_h(px(0.))
+                        .overflow_y_scroll()
+                        .p_2()
+                        .children(rows),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .p_2()
+                        .text_xs()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(
+                            div()
+                                .id("members-prev")
+                                .cursor_pointer()
+                                .child("Previous")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.member_offset = view.member_offset.saturating_sub(100);
+                                    view.request_member_page();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("members-next")
+                                .cursor_pointer()
+                                .child("Next")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.member_offset = (view.member_offset + 100).min(1900);
+                                    view.request_member_page();
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+    fn request_member_page(&mut self) {
+        if let Some(channel) = self.selected.and_then(|id| self.store.channel(id))
+            && let Some(guild_id) = channel.guild_id
+        {
+            (self.on_command)(UiCommand::SubscribeMembers {
+                guild_id,
+                channel_id: channel.id,
+                offset: self.member_offset,
+            });
+        }
+    }
+
+    fn render_side_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.dm_partner().is_none() {
+            return self.render_members(cx);
+        }
         let partner = self.dm_partner()?;
         let profile = model::profile(&self.store, &self.overlay, partner)?;
-        let card = self.render_profile(&profile, false);
+        let card = self.render_profile(&profile, false, cx);
         Some(
             div()
                 .id("side-panel")
@@ -1029,7 +2427,7 @@ impl ChatView {
     fn render_popup(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let user_id = self.popup?;
         let profile = model::profile(&self.store, &self.overlay, user_id)?;
-        let card = self.render_profile(&profile, true);
+        let card = self.render_profile(&profile, true, cx);
         Some(
             div()
                 .absolute()
@@ -1071,8 +2469,12 @@ impl Render for ChatView {
         let rail = self.render_rail(cx);
         let column = self.render_channel_column(cx);
         let pane = self.render_message_pane(cx);
-        let side = self.render_side_panel();
+        let side = self.render_side_panel(cx);
         let popup = self.render_popup(cx);
+        let picker = self.render_emoji_picker(cx);
+        let settings = self.render_settings(cx);
+        let message_dialog = self.render_message_dialog(cx);
+        let risk = self.render_risk_notice(cx);
 
         div()
             .relative()
@@ -1080,12 +2482,16 @@ impl Render for ChatView {
             .size_full()
             .bg(rgb(BG_PANE))
             .text_color(rgb(TEXT))
-            .text_sm()
+            .text_size(px(f32::from(self.preferences.font_size)))
             .child(rail)
             .child(column)
             .child(pane)
             .children(side)
+            .children(picker)
             .children(popup)
+            .children(settings)
+            .children(message_dialog)
+            .children(risk)
     }
 }
 
@@ -1099,6 +2505,7 @@ pub fn run(
     on_command: impl Fn(UiCommand) + 'static,
 ) {
     Application::new().run(move |cx: &mut App| {
+        crate::input::init(cx);
         let bounds = Bounds::centered(None, size(px(1280.), px(760.)), cx);
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

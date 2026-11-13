@@ -22,8 +22,15 @@ dc-api = { path = "crates/dc-api" }
 dc-core = { path = "crates/dc-core" }
 dc-store = { path = "crates/dc-store" }
 dc-ui = { path = "crates/dc-ui" }
+dc-plugin-host = { path = "crates/dc-plugin-host" }
+dc-audio = { path = "crates/dc-audio" }
+dc-voice = { path = "crates/dc-voice" }
 
 anyhow = "1"
+pulldown-cmark = { version = "0.13.6", default-features = false }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+rusqlite = { version = "0.42.0", default-features = false, features = ["bundled"] }
+keyring = { version = "3.6.3", default-features = false }
 fastrand = "2"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

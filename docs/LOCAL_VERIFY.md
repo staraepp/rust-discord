@@ -158,8 +158,9 @@ Expected: a dark window titled `dc-client`, about 1280×760.
    `channel-type-from-the-future`, `TEXT CHANNELS`, and `general`.
    Click `general`: the title becomes `# general`, its row highlights, and
    three messages appear oldest first, ending with `newest message`.
-   Times use **UTC in 12-hour format**, not your computer’s timezone yet.
-   Attachments appear as filenames; the composer is a placeholder.
+   The demo uses **UTC in 12-hour format**. The real app uses its local
+   offset at startup. The composer now supports typing and sending; demo
+   sends stay in memory and never contact Discord.
 3. **Profiles:** click a message author’s avatar or name. A profile card
    opens over the window; click outside it to dismiss. Click your avatar
    in the user bar to open your own card.
@@ -198,8 +199,9 @@ Please check on your machine (the new layout is **UNVERIFIED visually**):
 
 Grouping and reply previews have synthetic unit tests. The bundled demo
 history has three different authors and no reply, so inspect those features
-in a suitable live conversation (§9). Sending, emoji pickers, member lists,
-and settings buttons are not implemented yet.
+in a suitable live conversation (§9). The composer, picker, synthetic member list and settings editor now exist;
+see §10 for their eventual verification. Voice/capture controls are not
+implemented as working features.
 
 ## 9. The real app
 
@@ -247,3 +249,79 @@ Likely failure modes and what they would mean:
 | READY arrives but `guilds` prints `?` IDs or no channels | READY shape differs from the fixture | A1, A4 |
 | `dropping undecodable event event="READY"` | a required READY field is absent/renamed | A1 |
 | Captcha / "verify your account" prompts in the official client afterwards | anti-abuse flagged the session | A2 (stop and tell me) |
+
+
+## 10. Interactive text/settings verification (for when the build is ready)
+
+The owner asked to finish the full app before requiring their testing.
+These steps document future verification; they are not a development gate.
+All new live/visual/device behavior remains UNVERIFIED until run locally.
+
+### Offline, with synthetic data
+
+```bash
+DC_COSMETICS_DEMO=1 cargo run -p dc-ui --example demo
+DC_DEMO_FAIL_SEND=1 cargo run -p dc-ui --example demo
+```
+
+- Open `general`, type across multiple lines (Shift+Enter), and Send/Enter.
+  A synthetic own message should appear. Switch channels and back to check
+  independent drafts. In failure mode, the first send fails, preserving text
+  and attachments; manual retry should succeed once without duplicate rows.
+- Exercise clipboard, undo/redo, selection, non-Latin input and IME composition.
+  Whole-grapheme/combined-emoji navigation is pending the additional Unicode
+  library decision; editing currently respects UTF-8 scalar boundaries.
+- Use `+` to choose files. Removal is explicit before Send; the demo shows
+  filenames without reading/uploading the selected data.
+- Open the smile button, search Unicode/server emoji and choose one. Server
+  assets keep a text fallback in the offline demo. No emoji is sent until Send.
+- Open a guild member page, click a member, and customize that profile. Self
+  settings and another user’s settings must remain independent. Saving in
+  the demo is memory-only; it does not replace your cosmetics file.
+- Search loaded messages. Scroll up and receive/send messages; `Latest`
+  restores the bottom. Check wrapping, resizing, dropdown/popup stacking and
+  keyboard focus. Edit/delete live behavior is tested in the real app below.
+
+### Real app, on your machine
+
+Use the credential setup earlier in this guide. The app can store an existing
+session variable in the OS keyring without printing it:
+
+```bash
+cargo run -p dc-app -- --store-token
+# Then unset DC_TOKEN in your shell and launch the app normally.
+cargo run -p dc-app
+```
+
+`--forget-token` removes that keyring entry. Never put a credential in argv,
+a file, an issue, or a screenshot. This agent must not receive your token.
+
+- Accept the first-run risk notice; no Discord connection should start before
+  that click. On later launches, the saved acceptance skips the notice.
+- Send a benign message in a conversation you control, reply, edit your own
+  message, then explicitly confirm deletion. Confirm results in the official
+  client too. Test a disconnection: failed sends keep drafts; retries are
+  manual and reuse the original nonce. Do not repeatedly retry an ambiguous
+  success without checking the official client.
+- Choose a small non-sensitive file. The client caps 10 files/25 MiB total;
+  your server/account may allow less. API errors should preserve the draft.
+  Multipart uploads still need live user-account verification.
+- Check the first member page and explicit Next/Previous on a guild. The
+  opcode 37 subscription is based on observed client behavior, not a live
+  sandbox result. Check names, grouping, role colors and profile actions.
+- Save self and another user’s cosmetics; restart and confirm persistence.
+  An invalid color must not replace the previous file. Save appearance
+  separately. Confirm disabled plugin packages do not run, then enable only
+  the synthetic example from PLUGINS and explicitly Save appearance.
+- History caching is off by default. If enabled, the cache filename is scoped
+  to your user ID beside the config. Erase cached history through settings
+  and confirm it does not delete any Discord messages. Disabling caching
+  stops new writes; erasure is a separate explicit action.
+- Verify local timestamps, images and decoration alignment. The startup
+  offset does not account for per-message historical DST transitions.
+
+### Media
+
+Opus/RTP/discovery/jitter tests do not establish microphone, speaker, live
+voice, DAVE, screen capture or Go Live behavior. Those integrations remain
+unfinished; follow BUILD_PLAN rather than treating the foundations as calls.

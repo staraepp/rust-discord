@@ -10,6 +10,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_INCREMENTAL: 0
+  CMAKE_POLICY_VERSION_MINIMUM: 3.5
 
 jobs:
   checks:
@@ -21,13 +25,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libvulkan-dev libxcb1-dev libfontconfig-dev
+            libwayland-dev libvulkan-dev libxcb1-dev libfontconfig-dev \
+            libasound2-dev libopus-dev
       # rust-toolchain.toml pins the toolchain; rustup installs it on first use.
       - run: rustup show
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
       - run: cargo xtask ci
+      - run: cargo build -p dc-app -p dc-cli
+      - run: target/debug/dc-client --help
+      - run: cargo xtask licenses work/THIRD_PARTY_LICENSES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dc-client-linux-x86_64-dev
+          path: |
+            target/debug/dc-client
+            target/debug/dc-cli
+            LICENSE
+            README.md
+            docs/*.md
+            licenses/*
+            work/THIRD_PARTY_LICENSES.txt
+          retention-days: 3
 
   windows:
     name: build + test (windows)
@@ -36,3 +56,18 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show
       - run: cargo test --workspace
+      - run: cargo build -p dc-app -p dc-cli
+      - run: target/debug/dc-client.exe --help
+      - run: cargo xtask licenses work/THIRD_PARTY_LICENSES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dc-client-windows-x86_64-dev
+          path: |
+            target/debug/dc-client.exe
+            target/debug/dc-cli.exe
+            LICENSE
+            README.md
+            docs/*.md
+            licenses/*
+            work/THIRD_PARTY_LICENSES.txt
+          retention-days: 3

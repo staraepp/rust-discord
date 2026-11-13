@@ -10,7 +10,7 @@ use dc_protocol::model::{Channel, ChannelType, Message, User};
 use dc_store::Store;
 
 /// What the channel column is showing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// Direct messages.
     Home,
@@ -272,6 +272,7 @@ pub struct MessageRow {
     pub edited: bool,
     /// File names of attachments.
     pub attachments: Vec<String>,
+    pub images: Vec<ImageRef>,
     /// False for follow-up messages grouped under the previous header.
     pub show_header: bool,
     pub reply: Option<ReplyPreview>,
@@ -435,6 +436,23 @@ pub fn messages(
                 .iter()
                 .map(|a| a.filename.clone())
                 .collect(),
+            images: message
+                .attachments
+                .iter()
+                .filter(|a| {
+                    a.content_type
+                        .as_deref()
+                        .is_some_and(|t| t.starts_with("image/"))
+                        && a.url.starts_with("https://cdn.discordapp.com/")
+                })
+                .map(|a| ImageRef::Remote(a.url.clone()))
+                .chain(
+                    dc_core::emoji::image_links(&message.content)
+                        .into_iter()
+                        .map(ImageRef::Remote),
+                )
+                .take(20)
+                .collect(),
             show_header: !grouped,
             reply,
         });
@@ -528,6 +546,24 @@ pub fn own_profile(store: &Store, overlay: &LocalOverlay) -> Option<ProfileView>
     store
         .current_user()
         .map(|user| profile_of(user, store, overlay))
+}
+
+/// Search remains a view operation over already loaded messages.
+pub fn filter_messages(rows: &[MessageRow], query: &str) -> Vec<MessageRow> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return rows.to_vec();
+    }
+    rows.iter()
+        .filter(|r| {
+            r.content.to_lowercase().contains(&query) || r.author.to_lowercase().contains(&query)
+        })
+        .cloned()
+        .map(|mut row| {
+            row.show_header = true;
+            row
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -1,139 +1,97 @@
 # PROGRESS
 
-Last updated: 2026-11-13 — **Discord-style GPUI slice builds and passes the
-full checks**. The unfinished work from `6b81c9f` is integrated with the app
-and offline demo. The latest layout, CDN images, and cosmetics still need
-the owner’s visual verification (see LOCAL_VERIFY §8–§9).
+Last updated: 2026-11-13 — interactive text client, local settings and limited
+plugins are integrated; audio/voice packet foundations are implemented.
+**The full app requested by the owner is not finished.** See BUILD_PLAN for
+remaining voice, DAVE, capture, Rich Presence and broader plugin/text work.
 
-## Done (verified in the sandbox)
+## Verified headlessly on Linux
 
 `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo deny check`
-passes on Linux with Rust 1.97.0: **126 tests passed**, one existing mock
-transport doctest ignored. All cargo-deny checks passed (duplicate-version
-warnings remain in GPUI’s transitive tree). Also available as `cargo xtask ci`
-/ `just ci`. No dependencies or lockfile changes were needed for this repair.
+passes: **148 tests**, one existing ignored mock-transport doctest. Also built
+`dc-app`/`dc-cli` and ran `dc-client --help` / `--version` successfully.
+No Discord credential, live account or private screenshot was used.
+Duplicate-version warnings in the existing dependency tree remain permitted.
 
-- **Workspace**: `rust-toolchain.toml` (1.97.0), `deny.toml` (allow-list of
-  permissive licenses only → every GPL/AGPL/LGPL is denied; `dave`,
-  `openssl-sys`, `native-tls` banned explicitly), `xtask` + `justfile`,
-  GitHub Actions workflow (Linux full checks, Windows build + test),
-  `#![forbid(unsafe_code)]` workspace-wide.
-- **`dc-protocol`** (pure): all 44 gateway opcodes; receive envelope
-  (`GatewayReceive`), typed dispatches (`READY`, `RESUMED`, `MESSAGE_CREATE`,
-  `MESSAGE_UPDATE`, `MESSAGE_DELETE`, `GUILD_CREATE`, passthrough `Unknown`);
-  send payloads (Heartbeat, Identify, Resume); close-code classification;
-  models `User`, `Channel`, `ChannelType`, `Guild`, `Message`, `Attachment`,
-  `Ready`; `Snowflake`; `Secret<T>` (redacting Debug/Display, zeroize on
-  drop, no `Serialize`); `Clock` trait + `FakeClock`.
-- **`dc-gateway`**: sans-IO `Session` state machine (hello timeout, jittered
-  first heartbeat, heartbeat schedule, heartbeat requests, zombie detection,
-  identify vs resume, opcode 7, opcode 9, close codes, exponential backoff
-  with jitter and cap); async `GatewayClient` driver over
-  `Connector`/`Transport`/`Clock`; in-memory `MockConnector`; real
-  `WsConnector` (tokio-tungstenite + rustls, `wss://` only).
-- **`dc-api`**: `ApiClient` over `HttpTransport`/`Clock`; `RateLimiter` with
-  per-route + major-parameter buckets, `X-RateLimit-Bucket` mapping, global
-  limit, `Retry-After` (header, then JSON body); no retry without
-  `Retry-After`; bounded retries; latches on 401 and stops sending;
-  `get_gateway`, `get_messages`; `MockHttp`; real `ReqwestTransport`
-  (rustls, https only, `Authorization` marked sensitive).
-- **`dc-cli`**: `guilds`, `watch <channel_id>`, `history <channel_id> [N]`;
-  token from `DC_TOKEN` only (token-looking arguments are refused); terminal
-  output sanitized against escape-sequence injection.
-- **Tests** (93 at M0, 126 now): fixture parser tests, session state-machine tests, driver
-  tests on mock transport + fake clock (no real sleeping), rate-limiter and
-  API-client tests, redaction tests in every crate that touches the token.
-  All fixtures are synthetic (`fixtures/README.md`).
-- **CI**: the GitHub Actions workflow ran on the M0 pull request; both the
-  Linux job (`cargo xtask ci`) and the Windows job (`cargo test --workspace`)
-  passed.
+Implemented and integrated:
 
-- **Packaging**: `packaging/arch/PKGBUILD` and a `release` workflow that
-  builds the Arch package in an `archlinux` container (installs it and runs
-  `dc-cli help` as a smoke test) and publishes a GitHub pre-release on a
-  `v*` tag.
+- REST text create/edit/delete, JSON and multipart bodies, stable nonces and
+  Retry-After handling. Ambiguous transport failures do not auto-resend.
+  Requests redact credentials and body content; the real transport disables
+  redirects and bounds response bodies to 32 MiB. Multipart content-type and
+  sensitive authorization are tested at the real request-builder boundary.
+- Native multiline editor adapted from GPUI’s Apache-2.0 example: clipboard,
+  selection, undo/redo, UTF-16 IME ranges, Enter/Shift+Enter. Drafts are per
+  channel and remain intact on failure; a manual retry retains its nonce.
+- Sending/replies, native file selection, bounded attachment reads off the
+  network thread, own-message edit/delete controls with confirmation, manual
+  history paging, loaded-message search, Home/Guild selection memory, and
+  scroll-to-latest. The store keeps its 500-message/channel bound.
+- Native Markdown, reply previews, grouped messages, inline CDN images, and
+  searchable Unicode/server emoji with opt-in/out FakeNitro-lite link insertion.
+- Visible member-page subscriptions and bounded SYNC/INSERT/UPDATE/DELETE/
+  INVALIDATE reducer; group headings, role colors and profile actions. Member
+  pages are not a full-server fetch. Additional channel/user/delete dispatches
+  update the store without dropping partial channel fields.
+- Self/per-user cosmetics editor, atomic JSON replacement, appearance settings,
+  cache erasure and local startup time offset. Blank fields remove overrides.
+  Appearance preferences are separate from the cosmetics format.
+- OS keyring load/store/forget, no plaintext fallback. Token environment input
+  remains supported. First-run risk acceptance happens before connecting.
+- Opt-in account-scoped SQLite history (credentials/READY/unknown message fields
+  are not stored). Live create/delete events update the cache; partial edits
+  still need fuller cache reconciliation.
+- Limited QuickJS outgoing-text transforms: explicit per-package grant, no IO
+  bindings or automatic-send API, memory/stack/time limits, failure preserves
+  the draft. Installation and limitations: `docs/PLUGINS.md`.
+- Offline demo simulates sends, a first-send failure flag, member pages, custom
+  emoji entries and in-memory cosmetics. It never downloads images or writes
+  configuration. Edit/delete demo simulation remains limited.
+- CI now builds development binaries/artifacts for Linux/Windows, including
+  license texts collected with `cargo xtask licenses`. Arch build
+  dependencies and credential-free `--help` smoke tests are updated.
 
-- **`dc-store`** (pure): normalized state reduced from gateway dispatches
-  and REST history (guilds, channels, DMs, per-channel messages sorted and
-  de-duplicated, capped at 500 per channel; a new READY replaces everything).
-- **`dc-core`** (pure): `LocalOverlay`, the client-side cosmetics layer
-  (display name, name color, accent color, banner, avatar, avatar
-  decoration; `me` block plus per-user entries; strict JSON config).
-  `profile_color` and `bio` extend profile cards; decorations accept local
-  files or shop asset hashes. Documented in `docs/COSMETICS.md`.
-- **`dc-ui`**: pure view-models and a Discord-style GPUI layout: server
-  rail, separate Home/Guild channel column, bottom user bar, grouped messages
-  (7-minute window), reply previews, readable mention/channel/emoji text,
-  profile popup on author/self-avatar click, and one-to-one DM profile panel.
-  CDN images are cached in memory; pending/failed downloads keep fallbacks.
-  The gradient’s `Color`/RGB type mismatch and unmatched-`<` text duplication
-  are fixed, and the DM-order fixture expectation now matches its IDs.
-  The `UiOptions` export and image event/command types compile across all targets.
-- **`dc-app`** (`dc-client`): passes `UiOptions`; handles `FetchImage` via
-  `ApiClient::get_cdn`, returning bytes or `ImageFailed`. Commands process
-  sequentially in a cancellable future while gateway events keep flowing;
-  slow image downloads can delay later history requests. Mock transport tests
-  cover image bytes, missing/invalid URLs, and absence of CDN authorization
-  even when the API client holds a synthetic credential.
-- **Offline demo**: passes `UiOptions`, responds to image requests with
-  `ImageFailed` without network access, and includes sample profile gradients
-  and bios with `DC_COSMETICS_DEMO=1`.
-- **Timestamps**: the model accepts a UTC offset, but app and demo pass zero.
-  Display is UTC in 12-hour format until timezone support is selected; no
-  `chrono`/`time` dependency was added.
-- **Documentation**: cosmetics format, §8 walkthrough, continuation notes,
-  and README now match this build. README describes the actual feature status.
-- The earlier demo started on a virtual X display without panicking, but
-  produced no frames. The latest UI has been compiled and unit-tested here;
-  it has not been visually verified.
+Implemented foundations **not wired as working calls**:
 
-## Verified live by the owner (2026-11-13)
+- `dc-audio`: CPAL device/duplex adapter behind a device trait, bounded callback
+  queues, mute/deafen flags, Opus encoder/decoder. Only in-memory codec tests ran.
+- `dc-voice`: RTP framing, UDP discovery request/response validation and bounded
+  jitter buffer with sequence wrap/reordering/loss tests. Crypto/voice WS/DAVE
+  and app call controls are not implemented. Raw VOICE_SERVER_UPDATE payloads
+  are filtered before UI delivery so voice credentials do not enter the UI.
 
-As recorded in HANDOFF: the earlier `dc-client` connected on Linux, showed
-the guild’s categorized channel list, loaded message history with authors,
-times and wrapped text, and displayed `Connected as <name>`. This exercises
-U1–U3 and the history portion of U4. It does not verify the new layout or
-CDN downloads, live MESSAGE_CREATE, reconnect/resume, or cosmetics.
+## Earlier owner verification (2026-11-13)
 
-## UNVERIFIED (needs the owner, see `docs/LOCAL_VERIFY.md`)
+The earlier read-only client connected on Linux, listed categorized channels,
+loaded history with authors/times/wrapping, and showed `Connected as <name>`.
+That establishes the earlier connection/history path, not the new features.
 
-The owner’s earlier connection/history check is recorded above; the following
-behavior still needs local verification.
+## UNVERIFIED / remaining
 
-- U4. Live `MESSAGE_CREATE` parsing and channel filtering. → §5
-- U5. Heartbeat cadence keeps a real session alive for minutes. → §5, §7
-- U6. Resume / re-identify after a real network drop. → §6
-- U7. Real rate-limit headers from user-token requests match the parser.
+- U4–U7: live MESSAGE_CREATE, sustained heartbeat, resume/reconnect and real
+  rate-limit headers. LOCAL_VERIFY §3–§7.
+- U10–U12: latest visual/input behavior on Linux X11/Wayland and Windows;
+  all new REST sends/replies/uploads/edits/deletes, member subscriptions,
+  CDN rendering, settings and keyring behavior on a real desktop. §8–§10.
+- Audio devices, actual mixing/playout, voice WS, transport crypto, DAVE,
+  PTT/noise suppression, capture/video/Go Live, Rich Presence IPC: unfinished.
+- Remaining event bus/plugin APIs, incoming hooks, UI slots, capability-backed
+  IO and per-plugin storage/hot reload: unfinished. The limited text-transform
+  host does not implement all of M4.
+- Sticker picker, reactions, full-profile fetch, live presence, thread tree,
+  variable-height message virtualization and shop catalog browser: pending.
+- No measured performance, production release, or real hardware/media claim.
 
-- U10. **Everything visual in `dc-ui`**: layout, colors, scrolling, text
-  wrapping, click targets, whether images (banner, avatar, decoration) load
-  and scale sensibly, behaviour on Wayland vs X11. → LOCAL_VERIFY §8
-- U11. Latest `dc-client` layout/CDN integration against live Discord; keep
-  the earlier connection/history result separate from this new UI. → §9
-- U12. GPUI visual behavior on Windows. CI builds and unit-tests the
-  workspace, but does not exercise a real desktop window.
+## Scope and dependency authorization
 
-## Deviations from the blueprint (owner-requested, 2026-11-13)
+The owner now asks to build the whole app first, superseding earlier pauses
+for visual review and individual milestone approval. Keep working within the
+blueprint’s non-goals and existing privacy/licensing rules.
 
-- The GUI came before M1 was finished: there is a store and the overlay, but
-  **no event bus, no plugin traits, no built-in plugins** yet.
-- **No Slint vs GPUI bake-off**: the owner picked GPUI directly.
-- The GUI was built **before the protocol layer was verified live**, so a
-  wrong READY/Identify assumption (A1, A2) now also blocks the GUI.
-- `LocalOverlay` reads a JSON file; there is no settings UI.
-
-## Known gaps against what the owner asked for
-
-- Custom emoji / stickers (FakeNitro-lite): not started.
-- Shop decorations: direct asset hashes download from the CDN; no catalog
-  browser/fetcher or ownership changes. Static PNGs only.
-- No sending, markdown, inline attachment images, unread markers, thread
-  tree, member list, or settings/cosmetics editor. The composer is a placeholder.
-- Profiles show only fields/users already received; no separate full-profile
-  lookup, activity cards, badges, roles, presence dots, effects or frames.
-- Local timezone detection is pending (UTC for now).
-- Message lists render stored rows directly (up to the store’s 500/channel
-  cap); variable-height virtualization from the M2 criteria is still pending.
+Approved dependencies: pulldown-cmark, keyring, rusqlite, chrono, rquickjs,
+cpal, audiopus, native libdave. Integrated dependencies pass cargo-deny.
+The separate media/capture/Unicode dependency question and optional switch
+from libdave to `davey` are pending; see BUILD_PLAN. Do not infer approval.
 
 ## Assumptions (docs did not pin these down)
 
@@ -204,7 +162,9 @@ Each is marked `// ASSUMPTION:` in code unless noted.
   OpenSSL), `serde`, `serde_json`, `thiserror`, `anyhow`, `tracing`,
   `tracing-subscriber`, `zeroize`, `fastrand`, `futures-util`.
   `reqwest` + the TLS stack are the heavy ones.
-- D6. Timestamps are kept as strings (no `chrono`/`time` yet).
+- D6. Wire timestamps remain strings. The app now uses approved `chrono`
+  to detect its local UTC offset at startup; historical DST transitions
+  within the message list are not calculated per message.
 - D7. Workspace crates are licensed MIT to match the repo `LICENSE`.
 
 - D8. `deny.toml` changes forced by GPUI's dependency tree: licenses `Zlib`,
@@ -215,15 +175,23 @@ Each is marked `// ASSUMPTION:` in code unless noted.
 - D9. GPUI is a heavy dependency: roughly 500 extra crates, a debug binary of
   several hundred MB, and multi-minute clean builds.
 
-## Next (owner priority order)
 
-1. Owner checks LOCAL_VERIFY §8 (offline demo) and §9 (new real-account UI):
-   layout, scrolling, profiles, gradients/bios, CDN images, decorations.
-2. Message composer with sending.
-3. Emoji picker with FakeNitro-lite (unusable emoji → image links).
-4. Member list (requires guild subscriptions, opcode 37).
-5. Settings / cosmetics editor.
+- A12. Opcode 37’s lazy member subscription shape and two-stage guild/page
+  initialization follow observed behavior in Serein’s MIT-licensed client.
+  Commands wait for READY and are spaced by at least 750 ms. The initial
+  page is 0–99, and paging is explicit and bounded to 2000 slots. Verify live.
+- A13. Local time uses the current offset at startup, not a per-date timezone
+  conversion. Long-running sessions and old messages spanning DST may differ.
+- A14. FakeNitro-lite conservatively inserts selected custom emoji as links
+  when enabled; turning it off uses ordinary markup subject to server/account
+  permissions. There is no entitlement bypass or spoofing.
+- A15. Attachments use the documented multipart message path. Cloud pre-upload
+  URLs are not implemented. User-account acceptance and the account’s actual
+  upload limit need live verification; the client caps 10 files/25 MiB total.
 
-Carry-overs: rest of M1 (event bus, plugin traits), gateway compression
-(D3), keyring-backed token storage, shop decoration catalog, and timezone
-support. Ask the owner before adding any dependency.
+## Continuation
+
+Continue the full-app work from BUILD_PLAN. Do not ask the owner to test a
+partial window as a prerequisite for implementing the rest. Resolve the
+pending media-library choice before adding those dependencies; do not
+hand-roll crypto or present unfinished call/share controls as working.

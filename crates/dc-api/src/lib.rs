@@ -20,3 +20,6 @@ pub use ratelimit::{RateLimitHeaders, RateLimiter, Route};
 
 /// Default REST base URL.
 pub const API_BASE: &str = "https://discord.com/api/v9";
+
+pub mod upload;
+pub use upload::UploadFile;
