@@ -1,0 +1,27 @@
+[package]
+name = "dc-app"
+description = "The desktop client binary: wires the gateway and REST clients to the GPUI window."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "dc-client"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+dc-api.workspace = true
+dc-core.workspace = true
+dc-gateway.workspace = true
+dc-protocol.workspace = true
+dc-ui.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -9,6 +9,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Vulnerabilities and unsound crates are always denied. "Unmaintained"
+# notices are only enforced for crates this workspace depends on directly:
+# GPUI 0.2.2 pins a number of abandoned-but-working transitive crates
+# (async-std, paste, instant, ...) that we cannot replace from here.
+unmaintained = "workspace"
 
 [licenses]
 version = 2
@@ -22,6 +27,13 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
+    # Pulled in by GPUI's dependency tree. None of these is GPL/AGPL/LGPL:
+    # Zlib, NCSA and CC0 are permissive; MPL-2.0 is file-level copyleft that
+    # only binds changes to the MPL-licensed files themselves.
+    "Zlib",
+    "NCSA",
+    "CC0-1.0",
+    "MPL-2.0",
 ]
 
 [licenses.private]

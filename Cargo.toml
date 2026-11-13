@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -19,10 +19,18 @@ dbg_macro = "deny"
 dc-protocol = { path = "crates/dc-protocol" }
 dc-gateway = { path = "crates/dc-gateway" }
 dc-api = { path = "crates/dc-api" }
+dc-core = { path = "crates/dc-core" }
+dc-store = { path = "crates/dc-store" }
+dc-ui = { path = "crates/dc-ui" }
 
 anyhow = "1"
 fastrand = "2"
+futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# GPUI 0.2.2 is the newest release on crates.io and depends on `xattr 0.2`,
+# which does not compile against libc >= 0.2.190. `dc-ui` therefore pins
+# libc exactly; drop that pin when a newer GPUI is published.
+gpui = "0.2.2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
