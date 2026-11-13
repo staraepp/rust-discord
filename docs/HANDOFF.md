@@ -102,47 +102,40 @@ Palette observed (dark theme): app background ~#1a1a1e, channel column
 ~rgba(88,101,242,0.3), unread red #f23f43, online #23a55a, idle #f0b232,
 dnd #f23f43.
 
-## In flight on branch `claude/affectionate-ramanujan-a2dkra`
+## Completed on branch `claude/affectionate-ramanujan-a2dkra`
 
-Done (uncommitted work committed as "WIP" with this file):
+The unfinished view from `6b81c9f` now builds. The app and demo use
+`UiOptions`; the backend answers `FetchImage` with `get_cdn` bytes or
+`ImageFailed`. The demo always answers `ImageFailed` and stays offline.
+Both app and demo pass UTC offset zero: timestamps are 12-hour **UTC**, not
+local time yet. No new dependency was added.
 
-- `dc-protocol::cdn`: CDN URL builders (avatar, default avatar, guild icon,
-  banner, avatar decoration) + snowflake → Unix ms.
-- `User` now carries `banner`, `accent_color`, `avatar_decoration_data`;
-  `Guild::icon()`.
-- `dc-store`: user index (`Store::user`), `Store::guild`, guild icon.
-- `dc-core` overlay: new fields `profile_color`, `bio`;
-  `avatar_decoration` may be a local path or a catalog asset hash.
-- `dc-api`: `ApiClient::get_cdn(url)` (public CDN downloads, never
-  authenticated, own rate-limit bucket).
-- `dc-ui::model` rewritten: server rail, Home/Guild scope, DM rows with
-  avatars, grouped messages (7-minute window), reply previews, mention /
-  channel / emoji markup made readable, local 12-hour times, full
-  `ProfileView` (server data + local cosmetics).
+The existing groundwork is integrated: CDN URL builders; user banner/accent/
+decoration fields; the store’s user index and guild icons; local
+`profile_color`, `bio`, and decoration asset hashes; Home/Guild scopes;
+grouped messages and reply previews; profile popup and DM side panel.
 
-- `dc-ui::view` rewritten to the new layout (server rail, channel column
-  with user bar, message pane with grouped messages and reply previews,
-  DM profile side panel, profile popup on avatar/name click, CDN image
-  cache) and `dc-ui::lib` gained `UiCommand::FetchImage`,
-  `BackendEvent::Image`/`ImageFailed` and `UiOptions`. **This code was
-  written but never compiled** (the session ran out mid-build).
+Fixes include the profile gradient’s `Color`/RGB mismatch, duplicated prefixes
+for unmatched `<` text, and a reversed DM-order test expectation. Full Linux
+checks pass with Rust 1.97.0: fmt, clippy with warnings denied, 126 tests,
+and cargo-deny. Image-command tests use only mock HTTP and synthetic data.
+No account credentials or screenshots were used in this repair.
 
-**Not done yet — the build is broken until this is finished:**
+COSMETICS, PROGRESS, LOCAL_VERIFY §8, and README are updated. The latest UI
+has **not been visually verified**. Do not confuse the earlier owner-verified
+connection/history screenshot with verification of this new layout/images.
+The composer remains a placeholder; settings and member lists are absent.
 
-- Compile `dc-ui` and fix whatever the new `view.rs` gets wrong.
-- `dc-app`: call `dc_ui::run(events, UiOptions { overlay, utc_offset_minutes }, ..)`
-  and handle `UiCommand::FetchImage(url)` in `backend.rs` with
-  `api.get_cdn(&url)`, replying `BackendEvent::Image { url, bytes }` or
-  `ImageFailed`. Local UTC offset: needs a small dep (e.g. `chrono` with
-  `clock`) or pass 0 for now — ask the owner before adding a dependency.
-- `examples/demo.rs`: switch to `UiOptions`, answer `FetchImage` with
-  `ImageFailed` (no network in the demo).
-- Update `examples/demo.rs`, docs (`COSMETICS.md` for `profile_color`,
-  `bio`, catalog decorations), `PROGRESS.md`, `LOCAL_VERIFY.md` §8.
+Next features, explicitly ordered by the owner:
 
-Next after that (owner priority order, best guess): profile popup →
-message composer (send) → emoji picker + FakeNitro-lite → member list
-(needs guild subscriptions, opcode 37) → settings / cosmetics editor.
+1. Message composer (sending).
+2. Emoji picker with FakeNitro-lite.
+3. Member list (needs guild subscriptions, opcode 37).
+4. Settings / cosmetics editor.
+
+First have the owner inspect the window using LOCAL_VERIFY §8–§9. Keep
+secrets/screenshots out of the public repo, and ask before adding dependencies
+(including any timezone library).
 
 ## Build notes
 

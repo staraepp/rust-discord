@@ -17,14 +17,12 @@ use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
     AnyElement, App, Application, Bounds, ClickEvent, Context, FontWeight, Hsla, Image,
-    ImageFormat, ImageSource, ObjectFit, Rgba, ScrollHandle, SharedString, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, div, img, linear_color_stop, linear_gradient,
-    prelude::*, px, rgb, rgba, size,
+    ImageFormat, ImageSource, ObjectFit, Rgba, ScrollHandle, SharedString, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, div, img, linear_color_stop, linear_gradient, prelude::*, px, rgb,
+    rgba, size,
 };
 
-use crate::model::{
-    self, ImageRef, MessageRow, ProfileView, RailItem, RowKind, Scope, SidebarRow,
-};
+use crate::model::{self, ImageRef, MessageRow, ProfileView, RailItem, RowKind, Scope, SidebarRow};
 use crate::{BackendEvent, UiCommand};
 
 // Dark palette, picked by eye to sit close to the reference screenshots.
@@ -72,7 +70,21 @@ fn sniff_format(bytes: &[u8]) -> ImageFormat {
         [0x89, b'P', b'N', b'G', ..] => ImageFormat::Png,
         [0xff, 0xd8, ..] => ImageFormat::Jpeg,
         [b'G', b'I', b'F', ..] => ImageFormat::Gif,
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => ImageFormat::Webp,
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => ImageFormat::Webp,
         _ => ImageFormat::Png,
     }
 }
@@ -409,7 +421,14 @@ impl ChatView {
                         cx.notify();
                     })),
             )
-            .child(div().flex_none().w(px(32.)).h(px(2.)).rounded_full().bg(rgb(BORDER)))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(32.))
+                    .h(px(2.))
+                    .rounded_full()
+                    .bg(rgb(BORDER)),
+            )
             .children(icons)
     }
 
@@ -633,12 +652,18 @@ impl ChatView {
             .child(user_bar)
     }
 
-    fn render_message(&mut self, index: usize, row: &MessageRow, cx: &mut Context<Self>) -> AnyElement {
+    fn render_message(
+        &mut self,
+        index: usize,
+        row: &MessageRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let author_id = row.author_id;
-        let open_profile = move |view: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
-            view.popup = Some(author_id);
-            cx.notify();
-        };
+        let open_profile =
+            move |view: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+                view.popup = Some(author_id);
+                cx.notify();
+            };
         let mut body = row.content.clone();
         if row.edited {
             body.push_str(" (edited)");
@@ -852,7 +877,7 @@ impl ChatView {
         let card = profile.profile_color.map_or(BG_CARD, |c| c.0);
         let card_end = profile
             .banner_color
-            .map_or(darken(card, 0.7), |c| darken(c, 0.55));
+            .map_or(darken(card, 0.7), |c| darken(c.0, 0.55));
         let background = if profile.profile_color.is_some() {
             linear_gradient(
                 180.,
@@ -868,9 +893,7 @@ impl ChatView {
         };
         let banner_height = if compact { 105. } else { 120. };
         let avatar_size = 80.;
-        let banner_color = profile
-            .banner_color
-            .map_or(DEFAULT_BANNER, |c| c.0);
+        let banner_color = profile.banner_color.map_or(DEFAULT_BANNER, |c| c.0);
         let banner_image = profile.banner.as_ref().and_then(|b| self.image(b));
         let avatar = self.decorated_avatar(
             &profile.avatar,
@@ -901,19 +924,16 @@ impl ChatView {
             )
             .child(
                 // The avatar overlaps the banner by half its height.
-                div()
-                    .relative()
-                    .h(px(avatar_size / 2. + 8.))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(16.))
-                            .top(px(-(avatar_size / 2.) - 6.))
-                            .p(px(6.))
-                            .rounded_full()
-                            .bg(ring)
-                            .child(avatar),
-                    ),
+                div().relative().h(px(avatar_size / 2. + 8.)).child(
+                    div()
+                        .absolute()
+                        .left(px(16.))
+                        .top(px(-(avatar_size / 2.) - 6.))
+                        .p(px(6.))
+                        .rounded_full()
+                        .bg(ring)
+                        .child(avatar),
+                ),
             )
             .child(
                 div()

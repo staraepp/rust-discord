@@ -147,19 +147,26 @@ Needs a working Vulkan driver. On Arch, build dependencies are
 cargo run -p dc-ui --example demo
 ```
 
-Expected: a dark window titled `dc-client`, about 1100x720.
+Expected: a dark window titled `dc-client`, about 1280×760.
 
-- Left column: a grey strip, then the name `Fake Owner`; below it
-  `Fake Friends Server`, `🔊 Voice`, a greyed-out
-  `# channel-type-from-the-future`, the small heading `TEXT CHANNELS`,
-  `# general`, then `(unavailable server)`, `Direct messages`, `@ Fake Friend`,
-  `@ Fake Friend, other_fake`.
-- Right side: the title `Select a channel`, the hint
-  `Pick a channel on the left.`, and at the bottom the status line
-  `Demo data (not connected)`.
-- Click `# general`: the title becomes `# general`, the row is highlighted,
-  and three messages appear, oldest at the top, ending with
-  `Fake Owner 03:06 newest message`.
+1. **Home:** a 72px server rail with `DM`, `FF` (Fake Friends Server), and
+   a dimmed unavailable server. A separate channel column lists `Fake Friend`
+   first, then `Fake Friend, other_fake` with `3 Members`. The user bar at
+   its bottom shows `Fake Owner`. Initials stand in for remote images: this
+   demo does not download anything.
+2. **Guild:** click `FF`. The column shows `Voice`, a dimmed
+   `channel-type-from-the-future`, `TEXT CHANNELS`, and `general`.
+   Click `general`: the title becomes `# general`, its row highlights, and
+   three messages appear oldest first, ending with `newest message`.
+   Times use **UTC in 12-hour format**, not your computer’s timezone yet.
+   Attachments appear as filenames; the composer is a placeholder.
+3. **Profiles:** click a message author’s avatar or name. A profile card
+   opens over the window; click outside it to dismiss. Click your avatar
+   in the user bar to open your own card.
+4. **DM panel:** click `DM`, then `Fake Friend`. A profile panel appears on
+   the right. The group DM has no one-person profile panel. Demo history
+   comes from the same synthetic fixture for each selection; it is not
+   representative DM content.
 
 Then with sample cosmetics:
 
@@ -167,14 +174,32 @@ Then with sample cosmetics:
 DC_COSMETICS_DEMO=1 cargo run -p dc-ui --example demo
 ```
 
-Expected differences: the strip at the top-left is pink, your name reads
-`me but cooler` in yellow, and in `# general` the friend's messages are
-signed `bestie` in light blue.
+Expected differences: your user bar has a pink/plum gradient and the name
+`me but cooler` in yellow. Your popup includes `A local-only demo profile.`
+and a matching card gradient. The friend’s message name and one-to-one DM
+label read `bestie`; message names are light blue. Their profile has a teal
+card and `Synthetic friend, local cosmetics.` bio.
 
-Things I could not check and would like you to look at: does text wrap
-instead of running off the window, does the message list scroll with the
-wheel and start at the bottom, does the channel list scroll, is anything
-overlapping or cut off, does it work on both Wayland and X11.
+Please check on your machine (the new layout is **UNVERIFIED visually**):
+
+- Text wraps; channel names and profile text do not overlap neighboring panes.
+- Messages scroll with the wheel and open at the bottom; long channel lists
+  scroll without hiding the user bar.
+- Popups sit above the content, stay clickable, and dismiss from the backdrop.
+- Resize the window, especially with the DM side panel and a popup open;
+  report clipping or controls pushed out of reach.
+- In the real app (§9), check CDN avatars and server icons replace initials.
+  Use `docs/COSMETICS.md` to check a local banner/avatar, `profile_color`,
+  `bio`, and a known decoration asset hash. Check the decoration’s alignment
+  around the avatar. CDN downloads, image scaling, and cosmetics are not
+  verified by the headless demo.
+- If available, compare Wayland and X11; Windows visual behavior also needs
+  a local check. Report symptoms without committing private screenshots.
+
+Grouping and reply previews have synthetic unit tests. The bundled demo
+history has three different authors and no reply, so inspect those features
+in a suitable live conversation (§9). Sending, emoji pickers, member lists,
+and settings buttons are not implemented yet.
 
 ## 9. The real app
 

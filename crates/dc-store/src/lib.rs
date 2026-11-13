@@ -277,7 +277,10 @@ mod tests {
         // Users are indexed: self and DM recipients.
         assert!(store.user(Snowflake(100_000_000_000_000_001)).is_some());
         assert_eq!(
-            store.user(Snowflake(100_000_000_000_000_003)).unwrap().username,
+            store
+                .user(Snowflake(100_000_000_000_000_003))
+                .unwrap()
+                .username,
             "other_fake"
         );
         assert_eq!(store.guild(guilds[0].id).unwrap().icon, None);

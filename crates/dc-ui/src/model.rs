@@ -226,7 +226,11 @@ pub fn sidebar(store: &Store, overlay: &LocalOverlay, scope: Scope) -> Vec<Sideb
 }
 
 /// Title for the message pane.
-pub fn channel_title(store: &Store, overlay: &LocalOverlay, channel_id: Option<Snowflake>) -> String {
+pub fn channel_title(
+    store: &Store,
+    overlay: &LocalOverlay,
+    channel_id: Option<Snowflake>,
+) -> String {
     let me = store.current_user().map(|u| u.id);
     match channel_id.and_then(|id| store.channel(id)) {
         Some(channel) if matches!(channel.kind, ChannelType::Dm | ChannelType::GroupDm) => {
@@ -312,6 +316,7 @@ pub fn readable_content(
         out.push_str(&rest[..start]);
         let tail = &rest[start..];
         let Some(end) = tail.find('>') else {
+            rest = tail;
             break;
         };
         let inner = &tail[1..end];
@@ -330,10 +335,7 @@ pub fn readable_content(
                 Some(channel) => format!("#{}", channel.label()),
                 None => "#unknown-channel".to_owned(),
             })
-        } else if let Some(emoji) = inner
-            .strip_prefix("a:")
-            .or_else(|| inner.strip_prefix(':'))
-        {
+        } else if let Some(emoji) = inner.strip_prefix("a:").or_else(|| inner.strip_prefix(':')) {
             match emoji.split_once(':') {
                 Some((name, id)) if !name.is_empty() && id_of(id).is_some() => {
                     Some(format!(":{name}:"))
@@ -535,7 +537,11 @@ mod tests {
 
     macro_rules! fixture {
         ($path:literal) => {
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/", $path))
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/",
+                $path
+            ))
         };
     }
 
@@ -583,7 +589,10 @@ mod tests {
         assert_eq!(rail[0].initials, "FF");
         assert_eq!(rail[0].icon, None);
         assert!(rail[1].unavailable);
-        assert_eq!(scope_title(&store(), Scope::Guild(GUILD)), "Fake Friends Server");
+        assert_eq!(
+            scope_title(&store(), Scope::Guild(GUILD)),
+            "Fake Friends Server"
+        );
         assert_eq!(scope_title(&store(), Scope::Home), "Direct Messages");
     }
 
@@ -610,13 +619,14 @@ mod tests {
     fn home_sidebar_lists_dms_most_recent_first_with_avatars() {
         let rows = sidebar(&store(), &none(), Scope::Home);
         assert_eq!(rows.len(), 2);
-        // The group DM has no last_message_id, so its (larger) channel ID
-        // sorts it first.
-        assert_eq!(rows[0].label, "Fake Friend, other_fake");
-        assert_eq!(rows[0].subtitle.as_deref(), Some("3 Members"));
-        assert_eq!(rows[0].avatar, None);
-        assert_eq!(rows[1].label, "Fake Friend");
-        assert!(matches!(rows[1].avatar, Some(ImageRef::Remote(_))));
+        // The direct DM's last_message_id is newer than the group DM's
+        // channel ID (the fallback when it has no messages).
+        assert_eq!(rows[0].label, "Fake Friend");
+        assert_eq!(rows[0].subtitle, None);
+        assert!(matches!(rows[0].avatar, Some(ImageRef::Remote(_))));
+        assert_eq!(rows[1].label, "Fake Friend, other_fake");
+        assert_eq!(rows[1].subtitle.as_deref(), Some("3 Members"));
+        assert_eq!(rows[1].avatar, None);
         assert!(rows.iter().all(|r| r.kind == RowKind::Dm));
     }
 
@@ -641,7 +651,15 @@ mod tests {
              1 < 2 <notmarkup>"
         );
         assert_eq!(readable_content("a < b", &store, &none(), &[]), "a < b");
-        assert_eq!(readable_content("<@999>", &store, &none(), &[]), "@unknown-user");
+        assert_eq!(readable_content("hé <", &store, &none(), &[]), "hé <");
+        assert_eq!(
+            readable_content("<#300000000000000002> then <", &store, &none(), &[]),
+            "#general then <"
+        );
+        assert_eq!(
+            readable_content("<@999>", &store, &none(), &[]),
+            "@unknown-user"
+        );
     }
 
     #[test]
@@ -659,9 +677,14 @@ mod tests {
         assert_eq!(rows[1].author_color, Some(Color(0x00ccff)));
         assert_eq!(rows[1].author_id, FRIEND);
         assert!(rows[1].edited);
-        assert!(rows.iter().all(|r| r.show_header), "three different authors");
+        assert!(
+            rows.iter().all(|r| r.show_header),
+            "three different authors"
+        );
         assert!(rows.iter().all(|r| r.time.ends_with('M')));
-        assert!(matches!(&rows[1].avatar, ImageRef::Remote(url) if url.contains("/embed/avatars/")));
+        assert!(
+            matches!(&rows[1].avatar, ImageRef::Remote(url) if url.contains("/embed/avatars/"))
+        );
     }
 
     #[test]
@@ -698,7 +721,9 @@ mod tests {
         reply.id = Snowflake(reply.id.get() + (1000 << 22));
         reply.content = "replying".to_owned();
         let referenced = serde_json::to_value(&store.messages(GENERAL)[1]).unwrap();
-        reply.extra.insert("referenced_message".to_owned(), referenced);
+        reply
+            .extra
+            .insert("referenced_message".to_owned(), referenced);
         store.apply(&DispatchEvent::MessageCreate(Box::new(reply)));
 
         let rows = messages(&store, &none(), GENERAL, 0);
@@ -733,7 +758,10 @@ mod tests {
         assert!(mine.is_self && mine.customized);
         assert_eq!(mine.name, "me but cooler");
         assert_eq!(mine.username, "fake_owner");
-        assert_eq!(mine.banner, Some(ImageRef::Local("/home/fake/banner.png".into())));
+        assert_eq!(
+            mine.banner,
+            Some(ImageRef::Local("/home/fake/banner.png".into()))
+        );
         assert_eq!(mine.banner_color, Some(Color(0xff66aa)));
         assert_eq!(mine.profile_color, Some(Color(0x221133)));
         assert_eq!(mine.bio.as_deref(), Some("local bio"));
@@ -766,7 +794,9 @@ mod tests {
         )
         .unwrap();
         let view = profile_of(&user, &store(), &none());
-        assert!(matches!(&view.avatar, ImageRef::Remote(url) if url.contains("/avatars/100000000000000009/abc.png")));
+        assert!(
+            matches!(&view.avatar, ImageRef::Remote(url) if url.contains("/avatars/100000000000000009/abc.png"))
+        );
         assert!(matches!(&view.banner, Some(ImageRef::Remote(url)) if url.contains("/banners/")));
         assert!(matches!(&view.decoration, Some(ImageRef::Remote(url)) if url.contains("a_real")));
         assert_eq!(view.banner_color, Some(Color(0x123456)));

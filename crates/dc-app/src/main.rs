@@ -74,7 +74,12 @@ fn run() -> Result<()> {
         .context("could not start the backend thread")?;
 
     // Blocks until the window is closed.
-    dc_ui::run(event_rx, overlay, move |command| {
+    let options = dc_ui::UiOptions {
+        overlay,
+        // UTC until local time zone support is chosen (no extra dependency).
+        utc_offset_minutes: 0,
+    };
+    dc_ui::run(event_rx, options, move |command| {
         let _ = command_tx.send(command);
     });
 

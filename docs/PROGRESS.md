@@ -1,13 +1,17 @@
 # PROGRESS
 
-Last updated: 2026-11-13 — M0 merged; **first GUI slice** (store, cosmetics
-overlay, GPUI window) added at the owner's request, ahead of the blueprint
-order (see "Deviations").
+Last updated: 2026-11-13 — **Discord-style GPUI slice builds and passes the
+full checks**. The unfinished work from `6b81c9f` is integrated with the app
+and offline demo. The latest layout, CDN images, and cosmetics still need
+the owner’s visual verification (see LOCAL_VERIFY §8–§9).
 
 ## Done (verified in the sandbox)
 
 `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo deny check`
-passes (also available as `cargo xtask ci` / `just ci`).
+passes on Linux with Rust 1.97.0: **126 tests passed**, one existing mock
+transport doctest ignored. All cargo-deny checks passed (duplicate-version
+warnings remain in GPUI’s transitive tree). Also available as `cargo xtask ci`
+/ `just ci`. No dependencies or lockfile changes were needed for this repair.
 
 - **Workspace**: `rust-toolchain.toml` (1.97.0), `deny.toml` (allow-list of
   permissive licenses only → every GPL/AGPL/LGPL is denied; `dave`,
@@ -36,7 +40,7 @@ passes (also available as `cargo xtask ci` / `just ci`).
 - **`dc-cli`**: `guilds`, `watch <channel_id>`, `history <channel_id> [N]`;
   token from `DC_TOKEN` only (token-looking arguments are refused); terminal
   output sanitized against escape-sequence injection.
-- **Tests** (93 at M0, 114 now): fixture parser tests, session state-machine tests, driver
+- **Tests** (93 at M0, 126 now): fixture parser tests, session state-machine tests, driver
   tests on mock transport + fake clock (no real sleeping), rate-limiter and
   API-client tests, redaction tests in every crate that touches the token.
   All fixtures are synthetic (`fixtures/README.md`).
@@ -55,26 +59,47 @@ passes (also available as `cargo xtask ci` / `just ci`).
 - **`dc-core`** (pure): `LocalOverlay`, the client-side cosmetics layer
   (display name, name color, accent color, banner, avatar, avatar
   decoration; `me` block plus per-user entries; strict JSON config).
-  Documented in `docs/COSMETICS.md`.
-- **`dc-ui`**: tested view-models (`sidebar`, `messages`, `profile_card`) and
-  a GPUI window that draws them: profile card with local cosmetics, server
-  and channel tree, message list, status bar. `cargo run -p dc-ui --example
-  demo` opens it with synthetic data, no account needed.
-- **`dc-app`** (`dc-client` binary): GPUI on the main thread, tokio backend
-  thread for gateway + REST, channels in between; the UI never sees the
-  token. Opening a channel fetches its last 50 messages.
-- The demo window starts and keeps running on a virtual X display here
-  without panicking. That proves start-up and event handling only; nothing
-  was ever seen on screen (the software renderer produced no frames).
+  `profile_color` and `bio` extend profile cards; decorations accept local
+  files or shop asset hashes. Documented in `docs/COSMETICS.md`.
+- **`dc-ui`**: pure view-models and a Discord-style GPUI layout: server
+  rail, separate Home/Guild channel column, bottom user bar, grouped messages
+  (7-minute window), reply previews, readable mention/channel/emoji text,
+  profile popup on author/self-avatar click, and one-to-one DM profile panel.
+  CDN images are cached in memory; pending/failed downloads keep fallbacks.
+  The gradient’s `Color`/RGB type mismatch and unmatched-`<` text duplication
+  are fixed, and the DM-order fixture expectation now matches its IDs.
+  The `UiOptions` export and image event/command types compile across all targets.
+- **`dc-app`** (`dc-client`): passes `UiOptions`; handles `FetchImage` via
+  `ApiClient::get_cdn`, returning bytes or `ImageFailed`. Commands process
+  sequentially in a cancellable future while gateway events keep flowing;
+  slow image downloads can delay later history requests. Mock transport tests
+  cover image bytes, missing/invalid URLs, and absence of CDN authorization
+  even when the API client holds a synthetic credential.
+- **Offline demo**: passes `UiOptions`, responds to image requests with
+  `ImageFailed` without network access, and includes sample profile gradients
+  and bios with `DC_COSMETICS_DEMO=1`.
+- **Timestamps**: the model accepts a UTC offset, but app and demo pass zero.
+  Display is UTC in 12-hour format until timezone support is selected; no
+  `chrono`/`time` dependency was added.
+- **Documentation**: cosmetics format, §8 walkthrough, continuation notes,
+  and README now match this build. README describes the actual feature status.
+- The earlier demo started on a virtual X display without panicking, but
+  produced no frames. The latest UI has been compiled and unit-tested here;
+  it has not been visually verified.
+
+## Verified live by the owner (2026-11-13)
+
+As recorded in HANDOFF: the earlier `dc-client` connected on Linux, showed
+the guild’s categorized channel list, loaded message history with authors,
+times and wrapped text, and displayed `Connected as <name>`. This exercises
+U1–U3 and the history portion of U4. It does not verify the new layout or
+CDN downloads, live MESSAGE_CREATE, reconnect/resume, or cosmetics.
 
 ## UNVERIFIED (needs the owner, see `docs/LOCAL_VERIFY.md`)
 
-Nothing below has ever talked to Discord.
+The owner’s earlier connection/history check is recorded above; the following
+behavior still needs local verification.
 
-- U1. Real WebSocket transport (`dc-gateway::ws`): TLS connect, frame
-  handling, close codes. → LOCAL_VERIFY §3, §5
-- U2. Real HTTPS transport (`dc-api::http::real`). → §3, §4
-- U3. Live Identify is accepted and READY parses with real data. → §3
 - U4. Live `MESSAGE_CREATE` parsing and channel filtering. → §5
 - U5. Heartbeat cadence keeps a real session alive for minutes. → §5, §7
 - U6. Resume / re-identify after a real network drop. → §6
@@ -83,8 +108,10 @@ Nothing below has ever talked to Discord.
 - U10. **Everything visual in `dc-ui`**: layout, colors, scrolling, text
   wrapping, click targets, whether images (banner, avatar, decoration) load
   and scale sensibly, behaviour on Wayland vs X11. → LOCAL_VERIFY §8
-- U11. `dc-client` against live Discord (same risks as U1–U6). → §9
-- U12. GPUI on Windows: compiled and unit-tested by CI only.
+- U11. Latest `dc-client` layout/CDN integration against live Discord; keep
+  the earlier connection/history result separate from this new UI. → §9
+- U12. GPUI visual behavior on Windows. CI builds and unit-tests the
+  workspace, but does not exercise a real desktop window.
 
 ## Deviations from the blueprint (owner-requested, 2026-11-13)
 
@@ -98,12 +125,15 @@ Nothing below has ever talked to Discord.
 ## Known gaps against what the owner asked for
 
 - Custom emoji / stickers (FakeNitro-lite): not started.
-- Shop decorations: any local image works as a decoration, but the shop
-  catalog is not fetched.
-- Profile popups for other users: not built, so their banner / decoration
-  overrides have nowhere to show yet (names and name colors do).
-- Sending messages, markdown, inline images, avatars from Discord's CDN,
-  unread markers, threads in the tree: not built.
+- Shop decorations: direct asset hashes download from the CDN; no catalog
+  browser/fetcher or ownership changes. Static PNGs only.
+- No sending, markdown, inline attachment images, unread markers, thread
+  tree, member list, or settings/cosmetics editor. The composer is a placeholder.
+- Profiles show only fields/users already received; no separate full-profile
+  lookup, activity cards, badges, roles, presence dots, effects or frames.
+- Local timezone detection is pending (UTC for now).
+- Message lists render stored rows directly (up to the store’s 500/channel
+  cap); variable-height virtualization from the M2 criteria is still pending.
 
 ## Assumptions (docs did not pin these down)
 
@@ -161,12 +191,9 @@ Each is marked `// ASSUMPTION:` in code unless noted.
   other. `dc-api` re-exports `Secret`. This stretches "serde types, pure, no
   IO" a little (both are still pure). Alternative: a tiny `dc-util` crate —
   a crate-boundary change, so not done without asking.
-- D2. **No spoofing of the official client** (A2). Owner's answer
-  (2026-11-13): the rule may be set aside *if it turns out to be required
-  for the client to work*. That is not established: nothing has been tested
-  live, so the client stays honest. Revisit only with evidence from
-  LOCAL_VERIFY (the A2 rows of its failure table), and decide then what the
-  smallest truthful change would be.
+- D2. **Keep the honest client identity** (A2). The owner’s earlier live
+  connection and history check succeeded without spoofing, as recorded in
+  HANDOFF. There is no evidence that changing the identity is needed.
 - D3. Gateway **transport compression is not implemented** (blueprint §4
   lists it for `dc-gateway`). Plain JSON is simpler to verify first; READY
   will be a few MB uncompressed. Proposed for early M1 or once U3 passes.
@@ -188,12 +215,15 @@ Each is marked `// ASSUMPTION:` in code unless noted.
 - D9. GPUI is a heavy dependency: roughly 500 extra crates, a debug binary of
   several hundred MB, and multi-minute clean builds.
 
-## Next (waiting for the owner)
+## Next (owner priority order)
 
-1. Owner runs `docs/LOCAL_VERIFY.md` §8 (demo window, no account) and §9
-   (real account); report what looks wrong and what fails.
-2. Fix what that turns up, then pick the next feature: sending messages,
-   profile popups (so cosmetics show for other users), or custom emoji.
-3. Carry-overs: rest of M1 (event bus, plugin traits), gateway compression
-   (D3), keyring-backed token storage (replaces `DC_TOKEN`), fetching the
-   shop decoration catalog.
+1. Owner checks LOCAL_VERIFY §8 (offline demo) and §9 (new real-account UI):
+   layout, scrolling, profiles, gradients/bios, CDN images, decorations.
+2. Message composer with sending.
+3. Emoji picker with FakeNitro-lite (unusable emoji → image links).
+4. Member list (requires guild subscriptions, opcode 37).
+5. Settings / cosmetics editor.
+
+Carry-overs: rest of M1 (event bus, plugin traits), gateway compression
+(D3), keyring-backed token storage, shop decoration catalog, and timezone
+support. Ask the owner before adding any dependency.

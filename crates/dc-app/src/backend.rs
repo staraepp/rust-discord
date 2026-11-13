@@ -1,13 +1,14 @@
 //! The networking side: a tokio runtime that owns the gateway connection and
 //! the REST client, and translates between them and the UI's channels.
 
-use dc_api::ApiClient;
 use dc_api::http::real::{ReqwestTransport, TokioClock as ApiClock};
+use dc_api::{ApiClient, HttpTransport};
 use dc_gateway::session::{Session, SessionConfig};
 use dc_gateway::ws::{TokioClock as GatewayClock, WsConnector, random_jitter};
 use dc_gateway::{GatewayClient, GatewayError, GatewayEvent};
+use dc_protocol::Secret;
 use dc_protocol::gateway::{ClientProperties, DispatchEvent};
-use dc_protocol::{Secret, Snowflake};
+use dc_protocol::time::Clock;
 use dc_ui::{BackendEvent, UiCommand};
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -69,16 +70,22 @@ async fn serve(token: Secret<String>, events: Events, mut commands: UnboundedRec
     let mut gateway_task = tokio::spawn(client.run(gateway_tx));
     status(&events, "Connecting to the gateway…");
 
+    // Process downloads in order without blocking gateway events while a
+    // slow CDN request or rate-limit wait is pending. Dropping this future
+    // when the window closes cancels the pending request.
+    let command_task = async {
+        while let Some(command) = commands.recv().await {
+            let event = handle_command(&api, command).await;
+            if events.unbounded_send(event).is_err() {
+                break;
+            }
+        }
+    };
+    tokio::pin!(command_task);
     let mut gateway_open = true;
     loop {
         tokio::select! {
-            command = commands.recv() => match command {
-                Some(UiCommand::LoadHistory(channel_id)) => {
-                    load_history(&api, &events, channel_id).await;
-                }
-                // The window closed.
-                None => break,
-            },
+            _ = &mut command_task => break,
             event = gateway_rx.recv(), if gateway_open => match event {
                 Some(GatewayEvent::Dispatch(event)) => {
                     match &event {
@@ -118,18 +125,64 @@ async fn serve(token: Secret<String>, events: Events, mut commands: UnboundedRec
     }
 }
 
-async fn load_history(
-    api: &ApiClient<ReqwestTransport, ApiClock>,
-    events: &Events,
-    channel_id: Snowflake,
-) {
-    match api.get_messages(channel_id, HISTORY_PAGE, None).await {
-        Ok(messages) => {
-            let _ = events.unbounded_send(BackendEvent::History {
-                channel_id,
-                messages,
-            });
+async fn handle_command<H: HttpTransport, C: Clock>(
+    api: &ApiClient<H, C>,
+    command: UiCommand,
+) -> BackendEvent {
+    match command {
+        UiCommand::LoadHistory(channel_id) => {
+            match api.get_messages(channel_id, HISTORY_PAGE, None).await {
+                Ok(messages) => BackendEvent::History {
+                    channel_id,
+                    messages,
+                },
+                Err(err) => BackendEvent::Status(format!("Could not load messages: {err}")),
+            }
         }
-        Err(err) => status(events, format!("Could not load messages: {err}")),
+        UiCommand::FetchImage(url) => match api.get_cdn(&url).await {
+            Ok(bytes) => BackendEvent::Image { url, bytes },
+            Err(_) => BackendEvent::ImageFailed { url },
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dc_api::http::mock::MockHttp;
+    use dc_protocol::time::FakeClock;
+
+    #[tokio::test]
+    async fn image_download_returns_bytes_without_authorization() {
+        let http = MockHttp::new();
+        http.push(200, &[], "synthetic image bytes");
+        let api = ApiClient::new(
+            http.clone(),
+            FakeClock::new(),
+            Some(Secret::new("synthetic-test-credential".to_owned())),
+        );
+        let url = "https://cdn.discordapp.com/embed/avatars/0.png";
+        let event = handle_command(&api, UiCommand::FetchImage(url.into())).await;
+        assert!(matches!(event, BackendEvent::Image { url: actual, bytes }
+            if actual == url && bytes == b"synthetic image bytes"));
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, url);
+        assert!(requests[0].authorization.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_or_invalid_image_url_keeps_the_fallback() {
+        let http = MockHttp::new();
+        http.push(404, &[], "");
+        let api = ApiClient::new(http.clone(), FakeClock::new(), None);
+        for url in [
+            "https://cdn.discordapp.com/missing.png",
+            "https://example.invalid/image.png",
+        ] {
+            let event = handle_command(&api, UiCommand::FetchImage(url.into())).await;
+            assert!(matches!(event, BackendEvent::ImageFailed { url: actual } if actual == url));
+        }
+        assert_eq!(http.requests().len(), 1);
     }
 }

@@ -33,8 +33,8 @@ fn main() {
     let overlay = if std::env::var_os("DC_COSMETICS_DEMO").is_some() {
         LocalOverlay::from_json(
             r##"{
-                "me": {"display_name": "me but cooler", "name_color": "#ffd166", "accent_color": "#ff66aa"},
-                "users": {"100000000000000002": {"display_name": "bestie", "name_color": "#00ccff"}}
+                "me": {"display_name": "me but cooler", "name_color": "#ffd166", "accent_color": "#ff66aa", "profile_color": "#522244", "bio": "A local-only demo profile."},
+                "users": {"100000000000000002": {"display_name": "bestie", "name_color": "#00ccff", "profile_color": "#123344", "bio": "Synthetic friend, local cosmetics."}}
             }"##,
         )
         .expect("demo overlay")
@@ -46,13 +46,21 @@ fn main() {
     let _ = events.unbounded_send(BackendEvent::Status("Demo data (not connected)".into()));
     let _ = events.unbounded_send(dispatch(fixture!("gateway/ready.json")));
 
-    dc_ui::run(receiver, overlay, move |command| {
-        let UiCommand::LoadHistory(channel_id) = command;
-        let messages: Vec<Message> =
-            serde_json::from_str(fixture!("rest/messages.json")).expect("fixture messages");
-        let _ = events.unbounded_send(BackendEvent::History {
-            channel_id,
-            messages,
-        });
+    let options = dc_ui::UiOptions {
+        overlay,
+        utc_offset_minutes: 0,
+    };
+    dc_ui::run(receiver, options, move |command| match command {
+        UiCommand::LoadHistory(channel_id) => {
+            let messages: Vec<Message> =
+                serde_json::from_str(fixture!("rest/messages.json")).expect("fixture messages");
+            let _ = events.unbounded_send(BackendEvent::History {
+                channel_id,
+                messages,
+            });
+        }
+        UiCommand::FetchImage(url) => {
+            let _ = events.unbounded_send(BackendEvent::ImageFailed { url });
+        }
     });
 }

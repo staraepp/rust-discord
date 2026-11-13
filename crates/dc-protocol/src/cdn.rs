@@ -47,7 +47,10 @@ mod tests {
         );
         assert_eq!(
             avatar_url(id, None, 64),
-            format!("https://cdn.discordapp.com/embed/avatars/{}.png", (id.0 >> 22) % 6)
+            format!(
+                "https://cdn.discordapp.com/embed/avatars/{}.png",
+                (id.0 >> 22) % 6
+            )
         );
         assert_eq!(avatar_url(id, Some(""), 64), avatar_url(id, None, 64));
         assert_eq!(
