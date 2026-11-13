@@ -38,6 +38,9 @@ passes (also available as `cargo xtask ci` / `just ci`).
   tests on mock transport + fake clock (no real sleeping), rate-limiter and
   API-client tests, redaction tests in every crate that touches the token.
   All fixtures are synthetic (`fixtures/README.md`).
+- **CI**: the GitHub Actions workflow ran on the M0 pull request; both the
+  Linux job (`cargo xtask ci`) and the Windows job (`cargo test --workspace`)
+  passed.
 
 ## UNVERIFIED (needs the owner, see `docs/LOCAL_VERIFY.md`)
 
@@ -51,10 +54,6 @@ Nothing below has ever talked to Discord.
 - U5. Heartbeat cadence keeps a real session alive for minutes. → §5, §7
 - U6. Resume / re-identify after a real network drop. → §6
 - U7. Real rate-limit headers from user-token requests match the parser.
-- U8. Windows: nothing is Windows-specific yet, but the build + tests have
-  only run on Linux here. The CI workflow has a Windows job; its first run
-  is the verification.
-- U9. The GitHub Actions workflow itself has not run yet.
 
 ## Assumptions (docs did not pin these down)
 
@@ -100,14 +99,18 @@ Each is marked `// ASSUMPTION:` in code unless noted.
 
 ## Decisions for the owner to confirm
 
-- D1. **`Secret<T>` and the `Clock` trait live in `dc-protocol`**, because
+- D1. (Owner left this to me: keeping it as is for now.)
+  **`Secret<T>` and the `Clock` trait live in `dc-protocol`**, because
   both `dc-gateway` and `dc-api` need them and neither should depend on the
   other. `dc-api` re-exports `Secret`. This stretches "serde types, pure, no
   IO" a little (both are still pure). Alternative: a tiny `dc-util` crate —
   a crate-boundary change, so not done without asking.
-- D2. **No spoofing of the official client** (A2). If live testing shows
-  Discord refuses an honest client, that is a conversation to have, not
-  something to patch around quietly.
+- D2. **No spoofing of the official client** (A2). Owner's answer
+  (2026-11-13): the rule may be set aside *if it turns out to be required
+  for the client to work*. That is not established: nothing has been tested
+  live, so the client stays honest. Revisit only with evidence from
+  LOCAL_VERIFY (the A2 rows of its failure table), and decide then what the
+  smallest truthful change would be.
 - D3. Gateway **transport compression is not implemented** (blueprint §4
   lists it for `dc-gateway`). Plain JSON is simpler to verify first; READY
   will be a few MB uncompressed. Proposed for early M1 or once U3 passes.
